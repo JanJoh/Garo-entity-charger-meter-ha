@@ -1,0 +1,10 @@
+{
+  "name": "Garo Entity Charger Meter",
+  "country": "SE",
+  "resources": [],
+  "domain": "garo_entity_charger_meter",
+  "homeassistant": "2023.0.0",
+  "render_readme": true,
+  "iot_class": "local_polling",
+  "filename": "custom_components/garo_entity_charger_meter/manifest.json"
+}

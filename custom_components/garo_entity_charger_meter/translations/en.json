@@ -1,0 +1,16 @@
+{
+  "title": "Garo Entity Charger Meter",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Configure Garo Entity Charger Meter",
+        "data": {
+          "host": "Host",
+          "username": "Username",
+          "password": "Password",
+          "scan_interval": "Scan Interval (seconds)"
+        }
+      }
+    }
+  }
+}

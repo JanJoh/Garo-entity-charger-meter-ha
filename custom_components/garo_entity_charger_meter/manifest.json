@@ -1,0 +1,11 @@
+{
+  "domain": "garo_entity_charger_meter",
+  "name": "Garo Entity Charger Meter",
+  "version": "1.0.0",
+  "documentation": "https://github.com/JanJoh/Garo-entity-charger-meter-ha",
+  "requirements": ["aiohttp"],
+  "dependencies": [],
+  "codeowners": ["@JanJoh"],
+  "config_flow": true,
+  "iot_class": "local_polling"
+}
