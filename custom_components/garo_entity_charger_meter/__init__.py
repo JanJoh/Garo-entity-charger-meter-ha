@@ -1,51 +1,73 @@
-
-import logging
+from __future__ import annotations
+import logging, asyncio, async_timeout, aiohttp
+from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
 from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers.typing import ConfigType
 from homeassistant.exceptions import ConfigEntryNotReady
-import aiohttp
-import async_timeout
 
-from .const import DOMAIN
+from .const import (
+    DOMAIN, PLATFORMS, SERVICE_REFRESH,
+    CONF_HOST, CONF_USERNAME, CONF_PASSWORD,
+    CONF_IGNORE_TLS_ERRORS, CONF_USE_HTTP,
+    CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL,
+    API_PATH
+)
 
 _LOGGER = logging.getLogger(__name__)
 
+async def async_setup(hass: HomeAssistant, config: ConfigType):
+    return True
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry):
-    _LOGGER.debug("GARO DEBUG: async_setup_entry called")
+async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    hass.data.setdefault(DOMAIN, {})
+    host = entry.data[CONF_HOST]
+    username = entry.data[CONF_USERNAME]
+    password = entry.data[CONF_PASSWORD]
+    ignore_tls = entry.options.get(CONF_IGNORE_TLS_ERRORS, entry.data.get(CONF_IGNORE_TLS_ERRORS, False))
+    use_http = entry.options.get(CONF_USE_HTTP, entry.data.get(CONF_USE_HTTP, False))
+    scan_interval = entry.options.get(CONF_SCAN_INTERVAL, entry.data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL))
+    scheme = "http" if use_http else "https"
+    url = f"{scheme}://{host}{API_PATH}"
 
-    options = entry.options
-    data = entry.data
-
-    host = options.get("host", data.get("host"))
-    username = options.get("username", data.get("username"))
-    password = options.get("password", data.get("password"))
-    ignore_tls = options.get("ignore_tls_errors", data.get("ignore_tls_errors", True))
-
-    session = aiohttp_client.async_get_clientsession(hass)
-    auth = aiohttp.BasicAuth(username, password)
-    url = f"https://{host}/status/energy-meter"
-    ssl_context = False if ignore_tls else None
-
+    session = aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
     try:
-        async with async_timeout.timeout(10):
-            _LOGGER.debug("GARO DEBUG: Sending initial connectivity test to %s", url)
-            async with session.get(url, auth=auth, ssl=ssl_context) as response:
-                if response.status != 200:
-                    raise ConfigEntryNotReady(f"Unexpected HTTP status {response.status}")
-                _LOGGER.debug("GARO DEBUG: Device responded with HTTP %s", response.status)
-    except Exception as err:
-        _LOGGER.error("Garo device not ready: %s", err)
-        raise ConfigEntryNotReady("Device not reachable") from err
+        async with async_timeout.timeout(15):
+            async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                txt = await resp.text()
+                if resp.status in (401,403):
+                    raise ConfigEntryNotReady(f"Authentication failed (status {resp.status})")
+                if resp.status == 404:
+                    raise ConfigEntryNotReady("Endpoint not found (404) - adjust API_PATH")
+                if resp.status >= 400:
+                    raise ConfigEntryNotReady(f"HTTP {resp.status}: {txt[:120]}")
+    except (aiohttp.ClientError, asyncio.TimeoutError) as err:
+        raise ConfigEntryNotReady(f"Connection error: {err}") from err
 
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
+    hass.data[DOMAIN][entry.entry_id] = {
+        CONF_HOST: host,
+        CONF_USERNAME: username,
+        CONF_PASSWORD: password,
+        CONF_IGNORE_TLS_ERRORS: ignore_tls,
+        CONF_SCAN_INTERVAL: scan_interval,
+        "use_http": use_http,
+        "session": session,
+    }
+
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+
+    if not hass.services.has_service(DOMAIN, SERVICE_REFRESH):
+        async def _handle_refresh(call: ServiceCall):
+            for ent_data in hass.data.get(DOMAIN, {}).values():
+                coord = ent_data.get("coordinator")
+                if coord:
+                    await coord.async_request_refresh()
+        hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
     return True
 
-from .options import GaroOptionsFlowHandler
-
-
-async def async_get_options_flow(config_entry):
-    return GaroOptionsFlowHandler(config_entry)
-
+async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok:
+        hass.data[DOMAIN].pop(entry.entry_id, None)
+    return unload_ok

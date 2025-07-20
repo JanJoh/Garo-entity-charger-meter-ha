@@ -1,0 +1,4 @@
+refresh:
+  name: Force data refresh
+  description: Trigger an immediate update of all GARO charger meter sensors.
+  fields: {}

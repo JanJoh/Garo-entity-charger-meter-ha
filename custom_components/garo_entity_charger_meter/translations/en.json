@@ -1,16 +1,43 @@
 {
-  "title": "Garo Entity Charger Meter",
   "config": {
     "step": {
       "user": {
-        "title": "Configure Garo Entity Charger Meter",
+        "title": "GARO Charger Meter",
+        "description": "Enter connection details",
         "data": {
-          "host": "Host",
+          "host": "Host/IP",
           "username": "Username",
           "password": "Password",
-          "scan_interval": "Scan Interval (seconds)"
+          "scan_interval": "Scan interval (s)",
+          "ignore_tls_errors": "Ignore TLS errors",
+          "use_http": "Use HTTP instead of HTTPS",
+          "enable_phase_sensors": "Enable per-phase sensors",
+          "enable_line_voltages": "Enable line-to-line voltages"
         }
       }
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "GARO Charger Meter Options",
+        "data": {
+          "scan_interval": "Scan interval (s)",
+          "ignore_tls_errors": "Ignore TLS errors",
+          "use_http": "Use HTTP instead of HTTPS",
+          "enable_phase_sensors": "Enable per-phase sensors",
+          "enable_line_voltages": "Enable line-to-line voltages"
+        }
+      }
+    }
+  },
+  "error": {
+    "cannot_connect": "Failed to connect",
+    "invalid_auth": "Invalid authentication",
+    "unknown": "Unexpected error",
+    "already_configured": "Device already configured"
+  },
+  "abort": {
+    "reauth_successful": "Re-authentication successful"
   }
 }
