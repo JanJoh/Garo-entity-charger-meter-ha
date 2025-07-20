@@ -18,5 +18,6 @@ MANUFACTURER = "GARO"
 PRODUCT_NAME = "Charger Meter"
 
 API_PATH = "/status/energy-meter"
+API_PATH_TEMPS = "/status/temperatures"
 
 REDACT_KEYS = {CONF_PASSWORD, CONF_USERNAME}
