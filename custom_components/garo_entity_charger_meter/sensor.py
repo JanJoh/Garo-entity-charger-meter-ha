@@ -122,6 +122,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     # How many fast ticks between slow fetches. Initialized so slow fetch fires on tick 1.
     _slow_modulo = max(1, round(slow_scan_interval / scan_interval))
+    _LOGGER.info(
+        "Poll intervals: fast=%ds slow=%ds (slow fires every %d fast ticks)",
+        scan_interval, slow_scan_interval, _slow_modulo,
+    )
     _slow_cache: dict = {}
     _slow_counter = [_slow_modulo - 1]
 
