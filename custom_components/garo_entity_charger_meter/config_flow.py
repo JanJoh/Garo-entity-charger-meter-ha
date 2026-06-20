@@ -40,6 +40,11 @@ async def async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> Non
 class GaroChargerMeterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry):
+        return GaroChargerMeterOptionsFlow(config_entry)
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors = {}
         if user_input is not None:
@@ -87,6 +92,3 @@ class GaroChargerMeterOptionsFlow(config_entries.OptionsFlow):
         })
         return self.async_show_form(step_id="init", data_schema=schema)
 
-@callback
-def async_get_options_flow(config_entry):
-    return GaroChargerMeterOptionsFlow(config_entry)
