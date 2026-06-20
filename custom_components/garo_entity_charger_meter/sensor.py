@@ -423,6 +423,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     data["slow_coordinator"] = slow_coordinator
     await slow_coordinator.async_config_entry_first_refresh()
     await fast_coordinator.async_config_entry_first_refresh()
+    # Without a listener the coordinator never schedules recurring updates.
+    # Entities subscribe to fast_coordinator, so slow_coordinator needs a
+    # no-op listener to keep its timer alive.
+    entry.async_on_unload(slow_coordinator.async_add_listener(lambda: None))
 
     enable_phase = entry.options.get(CONF_ENABLE_PHASE_SENSORS, entry.data.get(CONF_ENABLE_PHASE_SENSORS, True))
     enable_line = entry.options.get(CONF_ENABLE_LINE_VOLTAGES, entry.data.get(CONF_ENABLE_LINE_VOLTAGES, False))
