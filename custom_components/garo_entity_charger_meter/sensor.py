@@ -8,8 +8,7 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
-    UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature,
-    UnitOfSignalStrength
+    UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
 )
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -65,7 +64,7 @@ SENSOR_MAP = {
     "network_interface": {"name":"Network Interface","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "ip_address": {"name":"IP Address","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "wifi_ssid": {"name":"Wi-Fi SSID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
-    "wifi_signal": {"name":"Wi-Fi Signal","device_class":SensorDeviceClass.SIGNAL_STRENGTH,"unit":UnitOfSignalStrength.DECIBELS_MILLIWATT,"state_class":SensorStateClass.MEASUREMENT,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "wifi_signal": {"name":"Wi-Fi Signal","device_class":SensorDeviceClass.SIGNAL_STRENGTH,"unit":"dBm","state_class":SensorStateClass.MEASUREMENT,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):

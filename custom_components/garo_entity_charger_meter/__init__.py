@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, asyncio, aiohttp
+import logging, asyncio, aiohttp, importlib
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import aiohttp_client
@@ -13,11 +13,12 @@ from .const import (
     CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL,
     API_PATH
 )
-from . import sensor as _sensor_module  # pre-import to avoid blocking import in Python 3.14+
-
 _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType):
+    await hass.async_add_executor_job(
+        importlib.import_module, f"{__name__}.sensor"
+    )
     return True
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
