@@ -28,6 +28,8 @@ API_PATH_TEMPS = "/status/temperatures"
 API_PATH_FIRMWARE_VERSION = "/config/firmware-version"
 API_PATH_DEVICE_ID = "/config/device-id"
 API_PATH_UNIT_ID = "/config/unit-id"
+API_PATH_CP_LEVEL_MAX = "/hal/cp-level-max"
+API_PATH_CP_LEVEL_MIN = "/hal/cp-level-min"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,6 +52,8 @@ SENSOR_MAP = {
     "firmware_version": {"name":"Firmware Version","device_class":None,"unit":None,"state_class":None},
     "device_id": {"name":"Device ID","device_class":None,"unit":None,"state_class":None},
     "unit_id": {"name":"Unit ID","device_class":None,"unit":None,"state_class":None},
+    "cp_level_max": {"name":"CP Signal Max","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
+    "cp_level_min": {"name":"CP Signal Min","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -80,6 +84,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     firmware_url = f"{scheme}://{host}{API_PATH_FIRMWARE_VERSION}"
     device_id_url = f"{scheme}://{host}{API_PATH_DEVICE_ID}"
     unit_id_url = f"{scheme}://{host}{API_PATH_UNIT_ID}"
+    cp_max_url = f"{scheme}://{host}{API_PATH_CP_LEVEL_MAX}"
+    cp_min_url = f"{scheme}://{host}{API_PATH_CP_LEVEL_MIN}"
 
     def _extract_simple(payload):
         """Pull a scalar out of a single-value JSON response (dict or bare value)."""
@@ -191,6 +197,30 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             except Exception as e:
                 _LOGGER.debug("%s fetch failed: %s", label, e)
 
+        # --- CP signal levels ---
+        for label, url, key in (
+            ("cp_level_max", cp_max_url, "cp_level_max"),
+            ("cp_level_min", cp_min_url, "cp_level_min"),
+        ):
+            try:
+                async with async_timeout.timeout(10):
+                    async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.debug("%s JSON decode failed", label)
+                                continue
+                            val = _extract_simple(raw)
+                            try:
+                                result[key] = float(val)
+                            except (ValueError, TypeError):
+                                _LOGGER.debug("%s unexpected value: %r", label, val)
+                        else:
+                            _LOGGER.debug("%s endpoint status %s", label, resp.status)
+            except Exception as e:
+                _LOGGER.debug("%s fetch failed: %s", label, e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -210,6 +240,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "power","energy","current_total","voltage_avg",
         "cpu_temperature","board_temperature",
         "firmware_version","device_id","unit_id",
+        "cp_level_max","cp_level_min",
     ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
