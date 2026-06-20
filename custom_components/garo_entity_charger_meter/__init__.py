@@ -61,10 +61,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.services.has_service(DOMAIN, SERVICE_REFRESH):
         async def _handle_refresh(call: ServiceCall):
             for ent_data in hass.data.get(DOMAIN, {}).values():
-                for key in ("slow_coordinator", "coordinator"):
-                    coord = ent_data.get(key)
-                    if coord:
-                        await coord.async_request_refresh()
+                coord = ent_data.get("coordinator")
+                if coord:
+                    await coord.async_request_refresh()
         hass.services.async_register(DOMAIN, SERVICE_REFRESH, _handle_refresh)
 
     return True

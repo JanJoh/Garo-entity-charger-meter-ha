@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <radialGradient id="bg" cx="45%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#1c3f6e"/>
+      <stop offset="100%" stop-color="#08111f"/>
+    </radialGradient>
+    <linearGradient id="bolt" x1="35%" y1="0%" x2="65%" y2="100%">
+      <stop offset="0%" stop-color="#ffe566"/>
+      <stop offset="100%" stop-color="#f59e0b"/>
+    </linearGradient>
+    <linearGradient id="chargerBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%"   stop-color="#152e52"/>
+      <stop offset="45%"  stop-color="#1e4a7a"/>
+      <stop offset="100%" stop-color="#152e52"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="waveglow">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="122" fill="url(#bg)"/>
+  <circle cx="128" cy="128" r="118" fill="none" stroke="#1d4ed8" stroke-width="1.5" opacity="0.3"/>
+
+  <!-- ── Charger body ── -->
+  <rect x="84" y="18" width="88" height="158" rx="11" ry="11"
+        fill="url(#chargerBody)" stroke="#2d6aaa" stroke-width="2.5"/>
+
+  <!-- Left-edge highlight to give depth -->
+  <rect x="84" y="29" width="3.5" height="104" rx="1.5"
+        fill="white" opacity="0.07"/>
+
+  <!-- Top status bar (accent colour) -->
+  <rect x="84" y="18" width="88" height="20" rx="11" ry="11"
+        fill="#1d4ed8" opacity="0.55"/>
+  <rect x="84" y="29" width="88" height="9" fill="#1d4ed8" opacity="0.55"/>
+
+  <!-- Status LED — green = ready -->
+  <circle cx="128" cy="27" r="5"   fill="#22c55e" opacity="0.95"/>
+  <circle cx="128" cy="27" r="8.5" fill="none" stroke="#22c55e" stroke-width="1" opacity="0.3"/>
+
+  <!-- Display screen bezel -->
+  <rect x="93" y="44" width="70" height="82" rx="7" ry="7"
+        fill="#060e1a" stroke="#1d4ed8" stroke-width="1.5"/>
+
+  <!-- Lightning bolt on screen -->
+  <polygon points="136,51 105,96 122,96 113,120 145,75 128,75"
+           fill="url(#bolt)" filter="url(#glow)" opacity="0.97"/>
+
+  <!-- Connector port housing -->
+  <rect x="101" y="140" width="54" height="24" rx="6" ry="6"
+        fill="#09172a" stroke="#2d6aaa" stroke-width="2"/>
+  <!-- Port recess -->
+  <rect x="109" y="146" width="38" height="12" rx="3.5"
+        fill="#040b14" stroke="#1d4ed8" stroke-width="1"/>
+  <!-- Three pin dots (Type 2 style) -->
+  <circle cx="119" cy="152" r="2.8" fill="#4aa8e0" opacity="0.85"/>
+  <circle cx="128" cy="152" r="2.8" fill="#4aa8e0" opacity="0.85"/>
+  <circle cx="137" cy="152" r="2.8" fill="#4aa8e0" opacity="0.85"/>
+
+  <!-- Mounting base -->
+  <rect x="104" y="174" width="48" height="7" rx="3.5"
+        fill="#1a3a5c" stroke="#2d6aaa" stroke-width="1.5" opacity="0.85"/>
+
+  <!-- ── Electrical sine wave (the "meter" part of the name) ── -->
+  <path d="M36,202 C52,182 68,222 84,202
+           C100,182 116,222 132,202
+           C148,182 164,222 180,202
+           C193,186 206,202 220,202"
+        fill="none" stroke="#38bdf8" stroke-width="5"
+        stroke-linecap="round" stroke-linejoin="round"
+        filter="url(#waveglow)" opacity="0.82"/>
+</svg>

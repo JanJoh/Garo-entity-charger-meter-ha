@@ -6,7 +6,6 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client, device_registry as dr
-from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
@@ -18,7 +17,7 @@ from .const import (
     CONF_SCAN_INTERVAL, CONF_SLOW_SCAN_INTERVAL,
     CONF_IGNORE_TLS_ERRORS, CONF_ENABLE_PHASE_SENSORS,
     CONF_ENABLE_LINE_VOLTAGES, CONF_USE_HTTP, MANUFACTURER, PRODUCT_NAME,
-    API_PATH, DEFAULT_SLOW_SCAN_INTERVAL
+    API_PATH, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL
 )
 
 try:
@@ -84,7 +83,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     host = opt(CONF_HOST)
     username = opt(CONF_USERNAME)
     password = opt(CONF_PASSWORD)
-    scan_interval = opt(CONF_SCAN_INTERVAL)
+    scan_interval = opt(CONF_SCAN_INTERVAL) or DEFAULT_SCAN_INTERVAL
     slow_scan_interval = opt(CONF_SLOW_SCAN_INTERVAL) or DEFAULT_SLOW_SCAN_INTERVAL
     ignore_tls = opt(CONF_IGNORE_TLS_ERRORS)
     use_http = opt(CONF_USE_HTTP)
@@ -121,154 +120,160 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     session = data.get("session") or aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
 
-    async def _update_slow():
-        result = {}
+    # How many fast ticks between slow fetches. Initialized so slow fetch fires on tick 1.
+    _slow_modulo = max(1, round(slow_scan_interval / scan_interval))
+    _slow_cache: dict = {}
+    _slow_counter = [_slow_modulo - 1]
 
-        # --- Temperature metrics ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(temp_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    t_text = await resp.text()
-                    if resp.status == 200:
-                        try:
-                            temps = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.warning("Temp JSON decode failed URL=%s Raw=%s", temp_url, t_text[:120])
-                        else:
-                            if isinstance(temps, dict):
-                                cpu = temps.get("cpu")
-                                board = temps.get("base_board")
-                                if isinstance(cpu, (int, float)):
-                                    result["cpu_temperature"] = float(cpu)
-                                if isinstance(board, (int, float)):
-                                    result["board_temperature"] = float(board)
-                    else:
-                        _LOGGER.debug("Temp endpoint status %s body=%s", resp.status, t_text[:120])
-        except Exception as e:
-            _LOGGER.debug("Temperature update failed: %s", e)
+    async def _async_update_data():
+        _slow_counter[0] += 1
+        if _slow_counter[0] >= _slow_modulo:
+            _slow_counter[0] = 0
+            _LOGGER.debug("Running slow fetch (every %d ticks)", _slow_modulo)
 
-        # --- Firmware version, device ID, unit ID ---
-        for label, url, key in (
-            ("firmware_version", firmware_url, "firmware_version"),
-            ("device_id", device_id_url, "device_id"),
-            ("unit_id", unit_id_url, "unit_id"),
-        ):
+            # --- Temperature metrics ---
             try:
                 async with asyncio.timeout(10):
-                    async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    async with session.get(temp_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        t_text = await resp.text()
+                        if resp.status == 200:
+                            try:
+                                temps = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.warning("Temp JSON decode failed URL=%s Raw=%s", temp_url, t_text[:120])
+                            else:
+                                if isinstance(temps, dict):
+                                    cpu = temps.get("cpu")
+                                    board = temps.get("base_board")
+                                    if isinstance(cpu, (int, float)):
+                                        _slow_cache["cpu_temperature"] = float(cpu)
+                                    if isinstance(board, (int, float)):
+                                        _slow_cache["board_temperature"] = float(board)
+                        else:
+                            _LOGGER.debug("Temp endpoint status %s body=%s", resp.status, t_text[:120])
+            except Exception as e:
+                _LOGGER.debug("Temperature update failed: %s", e)
+
+            # --- Firmware version, device ID, unit ID ---
+            for label, url, key in (
+                ("firmware_version", firmware_url, "firmware_version"),
+                ("device_id", device_id_url, "device_id"),
+                ("unit_id", unit_id_url, "unit_id"),
+            ):
+                try:
+                    async with asyncio.timeout(10):
+                        async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                            if resp.status == 200:
+                                try:
+                                    raw = await resp.json(content_type=None)
+                                except Exception:
+                                    raw = await resp.text()
+                                val = _extract_simple(raw)
+                                if val is not None:
+                                    _slow_cache[key] = str(val)
+                            else:
+                                _LOGGER.debug("%s endpoint status %s", label, resp.status)
+                except Exception as e:
+                    _LOGGER.debug("%s fetch failed: %s", label, e)
+
+            # --- Network interface ---
+            try:
+                async with asyncio.timeout(10):
+                    async with session.get(network_interface_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                         if resp.status == 200:
                             try:
                                 raw = await resp.json(content_type=None)
                             except Exception:
                                 raw = await resp.text()
                             val = _extract_simple(raw)
+                            _LOGGER.debug("network_interface=%r (raw=%r)", val, raw)
                             if val is not None:
-                                result[key] = str(val)
+                                _slow_cache["network_interface"] = str(val)
                         else:
-                            _LOGGER.debug("%s endpoint status %s", label, resp.status)
+                            _LOGGER.debug("network_interface endpoint status %s", resp.status)
             except Exception as e:
-                _LOGGER.debug("%s fetch failed: %s", label, e)
+                _LOGGER.debug("network_interface fetch failed: %s", e)
 
-        # --- Network interface and connection status ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(network_interface_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            raw = await resp.text()
-                        val = _extract_simple(raw)
-                        _LOGGER.debug("network_interface=%r (raw=%r)", val, raw)
-                        if val is not None:
-                            result["network_interface"] = str(val)
-                    else:
-                        _LOGGER.debug("network_interface endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("network_interface fetch failed: %s", e)
-
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(connection_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.debug("connection_status JSON decode failed")
+            # --- Connection status ---
+            try:
+                async with asyncio.timeout(10):
+                    async with session.get(connection_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.debug("connection_status JSON decode failed")
+                            else:
+                                _LOGGER.debug("connection_status raw=%r", raw)
+                                if isinstance(raw, dict):
+                                    for key in ("ip_address", "ip", "address", "ipv4"):
+                                        if key in raw:
+                                            _slow_cache["ip_address"] = str(raw[key])
+                                            break
+                                    for key in ("ssid", "SSID", "wifi_ssid"):
+                                        if key in raw:
+                                            _slow_cache["wifi_ssid"] = str(raw[key])
+                                            break
+                                    for key in ("rssi", "RSSI", "signal", "signal_strength", "signal_level"):
+                                        if key in raw:
+                                            try:
+                                                _slow_cache["wifi_signal"] = float(raw[key])
+                                            except (ValueError, TypeError):
+                                                pass
+                                            break
                         else:
-                            _LOGGER.debug("connection_status raw=%r", raw)
-                            if isinstance(raw, dict):
-                                for key in ("ip_address", "ip", "address", "ipv4"):
-                                    if key in raw:
-                                        result["ip_address"] = str(raw[key])
-                                        break
-                                for key in ("ssid", "SSID", "wifi_ssid"):
-                                    if key in raw:
-                                        result["wifi_ssid"] = str(raw[key])
-                                        break
-                                for key in ("rssi", "RSSI", "signal", "signal_strength", "signal_level"):
-                                    if key in raw:
-                                        try:
-                                            result["wifi_signal"] = float(raw[key])
-                                        except (ValueError, TypeError):
-                                            pass
-                                        break
-                    else:
-                        _LOGGER.debug("connection_status endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("connection_status fetch failed: %s", e)
+                            _LOGGER.debug("connection_status endpoint status %s", resp.status)
+            except Exception as e:
+                _LOGGER.debug("connection_status fetch failed: %s", e)
 
-        # --- SIM card info ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(sim_info_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.debug("sim_info JSON decode failed")
+            # --- SIM card info ---
+            try:
+                async with asyncio.timeout(10):
+                    async with session.get(sim_info_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.debug("sim_info JSON decode failed")
+                            else:
+                                _LOGGER.debug("sim_info raw=%r", raw)
+                                if isinstance(raw, dict):
+                                    for k in ("iccid", "ICCID"):
+                                        if k in raw:
+                                            _slow_cache["sim_iccid"] = str(raw[k])
+                                            break
+                                    for k in ("operator", "carrier", "network", "plmn"):
+                                        if k in raw:
+                                            _slow_cache["sim_operator"] = str(raw[k])
+                                            break
                         else:
-                            _LOGGER.debug("sim_info raw=%r", raw)
-                            if isinstance(raw, dict):
-                                for k in ("iccid", "ICCID"):
-                                    if k in raw:
-                                        result["sim_iccid"] = str(raw[k])
-                                        break
-                                for k in ("operator", "carrier", "network", "plmn"):
-                                    if k in raw:
-                                        result["sim_operator"] = str(raw[k])
-                                        break
-                    else:
-                        _LOGGER.debug("sim_info endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("sim_info fetch failed: %s", e)
+                            _LOGGER.debug("sim_info endpoint status %s", resp.status)
+            except Exception as e:
+                _LOGGER.debug("sim_info fetch failed: %s", e)
 
-        # --- PLC device status ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(plc_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.debug("plc_device_status JSON decode failed")
+            # --- PLC device status ---
+            try:
+                async with asyncio.timeout(10):
+                    async with session.get(plc_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.debug("plc_device_status JSON decode failed")
+                            else:
+                                _LOGGER.debug("plc_device_status raw=%r", raw)
+                                if isinstance(raw, dict):
+                                    if "firmware_version" in raw:
+                                        _slow_cache["plc_firmware_version"] = str(raw["firmware_version"])
+                                    if "zero_cross" in raw:
+                                        _slow_cache["plc_zero_cross"] = str(raw["zero_cross"])
                         else:
-                            _LOGGER.debug("plc_device_status raw=%r", raw)
-                            if isinstance(raw, dict):
-                                if "firmware_version" in raw:
-                                    result["plc_firmware_version"] = str(raw["firmware_version"])
-                                if "zero_cross" in raw:
-                                    result["plc_zero_cross"] = str(raw["zero_cross"])
-                    else:
-                        _LOGGER.debug("plc_device_status endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("plc_device_status fetch failed: %s", e)
+                            _LOGGER.debug("plc_device_status endpoint status %s", resp.status)
+            except Exception as e:
+                _LOGGER.debug("plc_device_status fetch failed: %s", e)
 
-        return result
-
-    async def _update_fast():
-        # Start with last known slow data so entities always have a full picture
-        result = dict(slow_coordinator.data or {})
+        # Merge last-known slow data, then overlay with fresh fast data
+        result = dict(_slow_cache)
 
         # --- Energy / electrical metrics ---
         try:
@@ -307,7 +312,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                                         elif phase == "L3-L1": result["voltage_l3_l1"] = val
                                     elif meas == "Energy.Active.Import.Register":
                                         kwh = val / 1000.0
-                                        prev = (fast_coordinator.data or {}).get("energy")
+                                        prev = (coordinator.data or {}).get("energy")
                                         if prev is not None and kwh < prev:
                                             _LOGGER.warning("Energy counter decreased (%.3f -> %.3f), keeping previous", prev, kwh)
                                             kwh = prev
@@ -406,34 +411,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         return result
 
-    slow_coordinator = DataUpdateCoordinator(
+    coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
-        name="garo_charger_meter_slow",
-        update_method=_update_slow,
-        update_interval=timedelta(seconds=slow_scan_interval),
-    )
-    fast_coordinator = DataUpdateCoordinator(
-        hass,
-        _LOGGER,
-        name="garo_charger_meter_fast",
-        update_method=_update_fast,
+        name="garo_entity_charger_meter",
+        update_method=_async_update_data,
         update_interval=timedelta(seconds=scan_interval),
     )
-    data["coordinator"] = fast_coordinator
-    data["slow_coordinator"] = slow_coordinator
-    await slow_coordinator.async_config_entry_first_refresh()
-    await fast_coordinator.async_config_entry_first_refresh()
-    # DataUpdateCoordinator only self-schedules while it has listeners.
-    # Entities subscribe to fast_coordinator, so drive the slow coordinator
-    # with an independent HA interval timer instead.
-    entry.async_on_unload(
-        async_track_time_interval(
-            hass,
-            lambda _now: hass.async_create_task(slow_coordinator.async_refresh()),
-            timedelta(seconds=slow_scan_interval),
-        )
-    )
+    data["coordinator"] = coordinator
+    await coordinator.async_config_entry_first_refresh()
 
     enable_phase = entry.options.get(CONF_ENABLE_PHASE_SENSORS, entry.data.get(CONF_ENABLE_PHASE_SENSORS, True))
     enable_line = entry.options.get(CONF_ENABLE_LINE_VOLTAGES, entry.data.get(CONF_ENABLE_LINE_VOLTAGES, False))
@@ -453,7 +439,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     if enable_line:
         wanted += ["voltage_l1_l2","voltage_l2_l3","voltage_l3_l1"]
 
-    entities = [GaroChargerMeterSensor(fast_coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
+    entities = [GaroChargerMeterSensor(coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
     async_add_entities(entities)
 
 class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
