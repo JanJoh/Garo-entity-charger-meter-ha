@@ -30,6 +30,8 @@ API_PATH_DEVICE_ID = "/config/device-id"
 API_PATH_UNIT_ID = "/config/unit-id"
 API_PATH_CP_LEVEL_MAX = "/hal/cp-level-max"
 API_PATH_CP_LEVEL_MIN = "/hal/cp-level-min"
+API_PATH_CHARGING_STATE = "/status/charging-state"
+API_PATH_PP_LEVEL = "/hal/pp-level"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +56,8 @@ SENSOR_MAP = {
     "unit_id": {"name":"Unit ID","device_class":None,"unit":None,"state_class":None},
     "cp_level_max": {"name":"CP Signal Max","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
     "cp_level_min": {"name":"CP Signal Min","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
+    "charging_state": {"name":"Charging State","device_class":None,"unit":None,"state_class":None},
+    "pp_level": {"name":"PP Level","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -86,6 +90,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     unit_id_url = f"{scheme}://{host}{API_PATH_UNIT_ID}"
     cp_max_url = f"{scheme}://{host}{API_PATH_CP_LEVEL_MAX}"
     cp_min_url = f"{scheme}://{host}{API_PATH_CP_LEVEL_MIN}"
+    charging_state_url = f"{scheme}://{host}{API_PATH_CHARGING_STATE}"
+    pp_level_url = f"{scheme}://{host}{API_PATH_PP_LEVEL}"
 
     def _extract_simple(payload):
         """Pull a scalar out of a single-value JSON response (dict or bare value)."""
@@ -221,6 +227,45 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             except Exception as e:
                 _LOGGER.debug("%s fetch failed: %s", label, e)
 
+        # --- Charging state ---
+        try:
+            async with async_timeout.timeout(10):
+                async with session.get(charging_state_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            raw = await resp.text()
+                        val = _extract_simple(raw)
+                        if val is not None:
+                            result["charging_state"] = str(val)
+                            _LOGGER.debug("charging_state=%s (raw=%r)", val, raw)
+                    else:
+                        _LOGGER.debug("charging_state endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("charging_state fetch failed: %s", e)
+
+        # --- PP level (Proximity Pilot — cable connection/type) ---
+        try:
+            async with async_timeout.timeout(10):
+                async with session.get(pp_level_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.debug("pp_level JSON decode failed")
+                        else:
+                            val = _extract_simple(raw)
+                            _LOGGER.debug("pp_level=%r (raw=%r)", val, raw)
+                            try:
+                                result["pp_level"] = float(val)
+                            except (ValueError, TypeError):
+                                _LOGGER.debug("pp_level unexpected value: %r", val)
+                    else:
+                        _LOGGER.debug("pp_level endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("pp_level fetch failed: %s", e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -241,6 +286,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "cpu_temperature","board_temperature",
         "firmware_version","device_id","unit_id",
         "cp_level_max","cp_level_min",
+        "charging_state","pp_level",
     ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
