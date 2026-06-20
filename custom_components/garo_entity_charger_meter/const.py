@@ -1,11 +1,13 @@
 DOMAIN = "garo_entity_charger_meter"
 PLATFORMS: list[str] = ["sensor"]
 DEFAULT_SCAN_INTERVAL = 15  # seconds
+DEFAULT_SLOW_SCAN_INTERVAL = 300  # seconds
 
 CONF_HOST = "host"
 CONF_USERNAME = "username"
 CONF_PASSWORD = "password"
 CONF_SCAN_INTERVAL = "scan_interval"
+CONF_SLOW_SCAN_INTERVAL = "slow_scan_interval"
 CONF_IGNORE_TLS_ERRORS = "ignore_tls_errors"
 CONF_ENABLE_PHASE_SENSORS = "enable_phase_sensors"
 CONF_ENABLE_LINE_VOLTAGES = "enable_line_voltages"

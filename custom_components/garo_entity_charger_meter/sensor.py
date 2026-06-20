@@ -14,9 +14,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import (
     DOMAIN, CONF_HOST, CONF_USERNAME, CONF_PASSWORD,
-    CONF_SCAN_INTERVAL, CONF_IGNORE_TLS_ERRORS, CONF_ENABLE_PHASE_SENSORS,
+    CONF_SCAN_INTERVAL, CONF_SLOW_SCAN_INTERVAL,
+    CONF_IGNORE_TLS_ERRORS, CONF_ENABLE_PHASE_SENSORS,
     CONF_ENABLE_LINE_VOLTAGES, CONF_USE_HTTP, MANUFACTURER, PRODUCT_NAME,
-    API_PATH
+    API_PATH, DEFAULT_SLOW_SCAN_INTERVAL
 )
 
 try:
@@ -83,6 +84,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     username = opt(CONF_USERNAME)
     password = opt(CONF_PASSWORD)
     scan_interval = opt(CONF_SCAN_INTERVAL)
+    slow_scan_interval = opt(CONF_SLOW_SCAN_INTERVAL) or DEFAULT_SLOW_SCAN_INTERVAL
     ignore_tls = opt(CONF_IGNORE_TLS_ERRORS)
     use_http = opt(CONF_USE_HTTP)
     auth_scheme = opt(CONF_AUTH_SCHEME)
@@ -118,62 +120,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     session = data.get("session") or aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
 
-    async def _async_update_data():
-        result: dict[str, float] = {}
-        # --- Energy / electrical metrics ---
-        try:
-            async with asyncio.timeout(15):
-                async with session.get(base_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    text = await resp.text()
-                    if resp.status != 200:
-                        _LOGGER.warning("Status %s energy URL=%s body=%s", resp.status, base_url, text[:160])
-                    else:
-                        try:
-                            payload = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.error("JSON decode failed energy URL=%s Raw=%s", base_url, text[:160])
-                        else:
-                            for block in payload:
-                                for sv in block.get("sampledValue", []):
-                                    meas = sv.get("measurand")
-                                    phase = sv.get("phase")
-                                    raw = sv.get("value")
-                                    if raw is None:
-                                        continue
-                                    try:
-                                        val = float(raw)
-                                    except (ValueError, TypeError):
-                                        continue
-                                    if meas == "Current.Import":
-                                        if phase == "L1": result["current_l1"] = val
-                                        elif phase == "L2": result["current_l2"] = val
-                                        elif phase == "L3": result["current_l3"] = val
-                                    elif meas == "Voltage":
-                                        if phase == "L1-N": result["voltage_l1"] = val
-                                        elif phase == "L2-N": result["voltage_l2"] = val
-                                        elif phase == "L3-N": result["voltage_l3"] = val
-                                        elif phase == "L1-L2": result["voltage_l1_l2"] = val
-                                        elif phase == "L2-L3": result["voltage_l2_l3"] = val
-                                        elif phase == "L3-L1": result["voltage_l3_l1"] = val
-                                    elif meas == "Energy.Active.Import.Register":
-                                        kwh = val / 1000.0
-                                        prev = hass.data[DOMAIN][entry.entry_id].get("coordinator", {}).data.get("energy") if isinstance(getattr(hass.data[DOMAIN][entry.entry_id].get("coordinator"), "data", None), dict) else None
-                                        if prev is not None and kwh < prev:
-                                            _LOGGER.warning("Energy counter decreased (%.3f -> %.3f), keeping previous", prev, kwh)
-                                            kwh = prev
-                                        result["energy"] = kwh
-                                    elif meas == "Power.Active.Import":
-                                        result["power"] = val
-        except Exception as e:
-            _LOGGER.warning("Energy update failed: %s", e)
-
-        # Derived metrics
-        if all(k in result for k in ("current_l1","current_l2","current_l3")):
-            result["current_total"] = result["current_l1"] + result["current_l2"] + result["current_l3"]
-        if all(k in result for k in ("voltage_l1","voltage_l2","voltage_l3")):
-            result["voltage_avg"] = (
-                result["voltage_l1"] + result["voltage_l2"] + result["voltage_l3"]
-            ) / 3.0
+    async def _update_slow():
+        result = {}
 
         # --- Temperature metrics ---
         try:
@@ -189,9 +137,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                             if isinstance(temps, dict):
                                 cpu = temps.get("cpu")
                                 board = temps.get("base_board")
-                                if isinstance(cpu, (int,float)):
+                                if isinstance(cpu, (int, float)):
                                     result["cpu_temperature"] = float(cpu)
-                                if isinstance(board, (int,float)):
+                                if isinstance(board, (int, float)):
                                     result["board_temperature"] = float(board)
                     else:
                         _LOGGER.debug("Temp endpoint status %s body=%s", resp.status, t_text[:120])
@@ -219,85 +167,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                             _LOGGER.debug("%s endpoint status %s", label, resp.status)
             except Exception as e:
                 _LOGGER.debug("%s fetch failed: %s", label, e)
-
-        # --- CP signal levels ---
-        for label, url, key in (
-            ("cp_level_max", cp_max_url, "cp_level_max"),
-            ("cp_level_min", cp_min_url, "cp_level_min"),
-        ):
-            try:
-                async with asyncio.timeout(10):
-                    async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                        if resp.status == 200:
-                            try:
-                                raw = await resp.json(content_type=None)
-                            except Exception:
-                                _LOGGER.debug("%s JSON decode failed", label)
-                                continue
-                            val = _extract_simple(raw)
-                            try:
-                                result[key] = float(val)
-                            except (ValueError, TypeError):
-                                _LOGGER.debug("%s unexpected value: %r", label, val)
-                        else:
-                            _LOGGER.debug("%s endpoint status %s", label, resp.status)
-            except Exception as e:
-                _LOGGER.debug("%s fetch failed: %s", label, e)
-
-        # --- Derived IEC 61851 CP state ---
-        if "cp_level_max" in result:
-            v = result["cp_level_max"]
-            if v > 10.5:
-                result["cp_state"] = "No vehicle connected"
-            elif v > 7.5:
-                result["cp_state"] = "Vehicle connected"
-            elif v > 4.5:
-                result["cp_state"] = "Charging"
-            elif v > 1.5:
-                result["cp_state"] = "Charging (ventilation required)"
-            elif v > -1.5:
-                result["cp_state"] = "No power"
-            else:
-                result["cp_state"] = "Fault"
-
-        # --- Charging state ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(charging_state_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            raw = await resp.text()
-                        val = _extract_simple(raw)
-                        if val is not None:
-                            result["charging_state"] = str(val)
-                            _LOGGER.debug("charging_state=%s (raw=%r)", val, raw)
-                    else:
-                        _LOGGER.debug("charging_state endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("charging_state fetch failed: %s", e)
-
-        # --- PP level (Proximity Pilot — cable connection/type) ---
-        try:
-            async with asyncio.timeout(10):
-                async with session.get(pp_level_url, auth=aiohttp.BasicAuth(username, password)) as resp:
-                    if resp.status == 200:
-                        try:
-                            raw = await resp.json(content_type=None)
-                        except Exception:
-                            _LOGGER.debug("pp_level JSON decode failed")
-                        else:
-                            val = _extract_simple(raw)
-                            _LOGGER.debug("pp_level=%r (raw=%r)", val, raw)
-                            try:
-                                result["pp_level"] = float(val)
-                            except (ValueError, TypeError):
-                                _LOGGER.debug("pp_level unexpected value: %r", val)
-                    else:
-                        _LOGGER.debug("pp_level endpoint status %s", resp.status)
-        except Exception as e:
-            _LOGGER.debug("pp_level fetch failed: %s", e)
 
         # --- Network interface and connection status ---
         try:
@@ -396,15 +265,164 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         return result
 
-    coordinator = DataUpdateCoordinator(
+    async def _update_fast():
+        # Start with last known slow data so entities always have a full picture
+        result = dict(slow_coordinator.data or {})
+
+        # --- Energy / electrical metrics ---
+        try:
+            async with asyncio.timeout(15):
+                async with session.get(base_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    text = await resp.text()
+                    if resp.status != 200:
+                        _LOGGER.warning("Status %s energy URL=%s body=%s", resp.status, base_url, text[:160])
+                    else:
+                        try:
+                            payload = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.error("JSON decode failed energy URL=%s Raw=%s", base_url, text[:160])
+                        else:
+                            for block in payload:
+                                for sv in block.get("sampledValue", []):
+                                    meas = sv.get("measurand")
+                                    phase = sv.get("phase")
+                                    raw = sv.get("value")
+                                    if raw is None:
+                                        continue
+                                    try:
+                                        val = float(raw)
+                                    except (ValueError, TypeError):
+                                        continue
+                                    if meas == "Current.Import":
+                                        if phase == "L1": result["current_l1"] = val
+                                        elif phase == "L2": result["current_l2"] = val
+                                        elif phase == "L3": result["current_l3"] = val
+                                    elif meas == "Voltage":
+                                        if phase == "L1-N": result["voltage_l1"] = val
+                                        elif phase == "L2-N": result["voltage_l2"] = val
+                                        elif phase == "L3-N": result["voltage_l3"] = val
+                                        elif phase == "L1-L2": result["voltage_l1_l2"] = val
+                                        elif phase == "L2-L3": result["voltage_l2_l3"] = val
+                                        elif phase == "L3-L1": result["voltage_l3_l1"] = val
+                                    elif meas == "Energy.Active.Import.Register":
+                                        kwh = val / 1000.0
+                                        prev = (fast_coordinator.data or {}).get("energy")
+                                        if prev is not None and kwh < prev:
+                                            _LOGGER.warning("Energy counter decreased (%.3f -> %.3f), keeping previous", prev, kwh)
+                                            kwh = prev
+                                        result["energy"] = kwh
+                                    elif meas == "Power.Active.Import":
+                                        result["power"] = val
+        except Exception as e:
+            _LOGGER.warning("Energy update failed: %s", e)
+
+        # Derived metrics
+        if all(k in result for k in ("current_l1", "current_l2", "current_l3")):
+            result["current_total"] = result["current_l1"] + result["current_l2"] + result["current_l3"]
+        if all(k in result for k in ("voltage_l1", "voltage_l2", "voltage_l3")):
+            result["voltage_avg"] = (
+                result["voltage_l1"] + result["voltage_l2"] + result["voltage_l3"]
+            ) / 3.0
+
+        # --- CP signal levels ---
+        for label, url, key in (
+            ("cp_level_max", cp_max_url, "cp_level_max"),
+            ("cp_level_min", cp_min_url, "cp_level_min"),
+        ):
+            try:
+                async with asyncio.timeout(10):
+                    async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                _LOGGER.debug("%s JSON decode failed", label)
+                                continue
+                            val = _extract_simple(raw)
+                            try:
+                                result[key] = float(val)
+                            except (ValueError, TypeError):
+                                _LOGGER.debug("%s unexpected value: %r", label, val)
+                        else:
+                            _LOGGER.debug("%s endpoint status %s", label, resp.status)
+            except Exception as e:
+                _LOGGER.debug("%s fetch failed: %s", label, e)
+
+        # --- Derived IEC 61851 CP state ---
+        if "cp_level_max" in result:
+            v = result["cp_level_max"]
+            if v > 10.5:
+                result["cp_state"] = "No vehicle connected"
+            elif v > 7.5:
+                result["cp_state"] = "Vehicle connected"
+            elif v > 4.5:
+                result["cp_state"] = "Charging"
+            elif v > 1.5:
+                result["cp_state"] = "Charging (ventilation required)"
+            elif v > -1.5:
+                result["cp_state"] = "No power"
+            else:
+                result["cp_state"] = "Fault"
+
+        # --- Charging state ---
+        try:
+            async with asyncio.timeout(10):
+                async with session.get(charging_state_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            raw = await resp.text()
+                        val = _extract_simple(raw)
+                        if val is not None:
+                            result["charging_state"] = str(val)
+                            _LOGGER.debug("charging_state=%s (raw=%r)", val, raw)
+                    else:
+                        _LOGGER.debug("charging_state endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("charging_state fetch failed: %s", e)
+
+        # --- PP level (Proximity Pilot — cable connection/type) ---
+        try:
+            async with asyncio.timeout(10):
+                async with session.get(pp_level_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.debug("pp_level JSON decode failed")
+                        else:
+                            val = _extract_simple(raw)
+                            _LOGGER.debug("pp_level=%r (raw=%r)", val, raw)
+                            try:
+                                result["pp_level"] = float(val)
+                            except (ValueError, TypeError):
+                                _LOGGER.debug("pp_level unexpected value: %r", val)
+                    else:
+                        _LOGGER.debug("pp_level endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("pp_level fetch failed: %s", e)
+
+        return result
+
+    slow_coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
-        name="garo_entity_charger_meter",
-        update_method=_async_update_data,
+        name="garo_charger_meter_slow",
+        update_method=_update_slow,
+        update_interval=timedelta(seconds=slow_scan_interval),
+    )
+    fast_coordinator = DataUpdateCoordinator(
+        hass,
+        _LOGGER,
+        name="garo_charger_meter_fast",
+        update_method=_update_fast,
         update_interval=timedelta(seconds=scan_interval),
     )
-    data["coordinator"] = coordinator
-    await coordinator.async_config_entry_first_refresh()
+    data["coordinator"] = fast_coordinator
+    data["slow_coordinator"] = slow_coordinator
+    await slow_coordinator.async_config_entry_first_refresh()
+    await fast_coordinator.async_config_entry_first_refresh()
 
     enable_phase = entry.options.get(CONF_ENABLE_PHASE_SENSORS, entry.data.get(CONF_ENABLE_PHASE_SENSORS, True))
     enable_line = entry.options.get(CONF_ENABLE_LINE_VOLTAGES, entry.data.get(CONF_ENABLE_LINE_VOLTAGES, False))
@@ -424,7 +442,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     if enable_line:
         wanted += ["voltage_l1_l2","voltage_l2_l3","voltage_l3_l1"]
 
-    entities = [GaroChargerMeterSensor(coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
+    entities = [GaroChargerMeterSensor(fast_coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
     async_add_entities(entities)
 
 class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):

@@ -8,9 +8,10 @@ from homeassistant.data_entry_flow import FlowResult
 from .const import (
     DOMAIN,
     CONF_HOST, CONF_USERNAME, CONF_PASSWORD,
-    CONF_SCAN_INTERVAL, CONF_IGNORE_TLS_ERRORS,
+    CONF_SCAN_INTERVAL, CONF_SLOW_SCAN_INTERVAL,
+    CONF_IGNORE_TLS_ERRORS,
     CONF_ENABLE_PHASE_SENSORS, CONF_ENABLE_LINE_VOLTAGES,
-    CONF_USE_HTTP, DEFAULT_SCAN_INTERVAL
+    CONF_USE_HTTP, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ class GaroChargerMeterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             vol.Required(CONF_USERNAME, default=(user_input or {}).get(CONF_USERNAME, "")): str,
             vol.Required(CONF_PASSWORD, default=(user_input or {}).get(CONF_PASSWORD, "")): str,
             vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
+            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=DEFAULT_SLOW_SCAN_INTERVAL): int,
             vol.Optional(CONF_IGNORE_TLS_ERRORS, default=False): bool,
             vol.Optional(CONF_USE_HTTP, default=False): bool,
             vol.Optional(CONF_ENABLE_PHASE_SENSORS, default=True): bool,
@@ -77,6 +79,7 @@ class GaroChargerMeterOptionsFlow(config_entries.OptionsFlow):
         data = {**self._entry.data, **self._entry.options}
         schema = vol.Schema({
             vol.Required(CONF_SCAN_INTERVAL, default=data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): int,
+            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=data.get(CONF_SLOW_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL)): int,
             vol.Optional(CONF_IGNORE_TLS_ERRORS, default=data.get(CONF_IGNORE_TLS_ERRORS, False)): bool,
             vol.Optional(CONF_USE_HTTP, default=data.get(CONF_USE_HTTP, False)): bool,
             vol.Optional(CONF_ENABLE_PHASE_SENSORS, default=data.get(CONF_ENABLE_PHASE_SENSORS, True)): bool,
