@@ -359,7 +359,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "power","energy","current_total","voltage_avg",
         "cpu_temperature","board_temperature",
         "firmware_version","device_id","unit_id",
-        "cp_level_max","cp_level_min",
+        "cp_level_max","cp_level_min","cp_state",
         "charging_state","pp_level",
         "network_interface","ip_address","wifi_ssid","wifi_signal",
     ]
