@@ -21,7 +21,7 @@ Also surfaces EV charging state, CP/PP signal levels, temperatures, and device d
 
 - GARO EV charger with Entity Balance / DLB firmware exposing a local REST API
 - BasicAuth credentials (printed on a sticker on the physical device)
-  - Username: `GaroLI-xxxxxxxxx`
+  - Username: `GaroCU-xxxxxxxxx`
   - Password: `xxxx-xxxx-xxxx` — **enter in lowercase**, regardless of what the sticker says
 
 ---
