@@ -24,10 +24,14 @@
     "error": {
       "cannot_connect": "Cannot connect to the device. Check the host address and network.",
       "invalid_auth": "Invalid credentials. Check username and password (password is case-sensitive, use lowercase).",
+      "slow_must_be_gte_fast": "Slow poll interval must be greater than or equal to the fast poll interval.",
       "unknown": "Unexpected error. Check the Home Assistant logs."
     }
   },
   "options": {
+    "error": {
+      "slow_must_be_gte_fast": "Slow poll interval must be greater than or equal to the fast poll interval."
+    },
     "step": {
       "init": {
         "title": "GARO EV Charger — Options",

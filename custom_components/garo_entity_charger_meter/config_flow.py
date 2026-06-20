@@ -48,26 +48,31 @@ class GaroChargerMeterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         errors = {}
         if user_input is not None:
-            try:
-                await self.async_set_unique_id(user_input[CONF_HOST])
-                self._abort_if_unique_id_configured()
-                await async_validate_input(self.hass, user_input)
-            except InvalidAuth:
-                errors["base"] = "invalid_auth"
-            except CannotConnect:
-                errors["base"] = "cannot_connect"
-            except Exception:
-                _LOGGER.exception("Unexpected error validating input")
-                errors["base"] = "unknown"
+            scan = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            slow = user_input.get(CONF_SLOW_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL)
+            if slow < scan:
+                errors[CONF_SLOW_SCAN_INTERVAL] = "slow_must_be_gte_fast"
             else:
-                return self.async_create_entry(title=f"GARO Charger @ {user_input[CONF_HOST]}", data=user_input)
+                try:
+                    await self.async_set_unique_id(user_input[CONF_HOST])
+                    self._abort_if_unique_id_configured()
+                    await async_validate_input(self.hass, user_input)
+                except InvalidAuth:
+                    errors["base"] = "invalid_auth"
+                except CannotConnect:
+                    errors["base"] = "cannot_connect"
+                except Exception:
+                    _LOGGER.exception("Unexpected error validating input")
+                    errors["base"] = "unknown"
+                else:
+                    return self.async_create_entry(title=f"GARO Charger @ {user_input[CONF_HOST]}", data=user_input)
 
         schema = vol.Schema({
             vol.Required(CONF_HOST, default=(user_input or {}).get(CONF_HOST, "")): str,
             vol.Required(CONF_USERNAME, default=(user_input or {}).get(CONF_USERNAME, "")): str,
             vol.Required(CONF_PASSWORD, default=(user_input or {}).get(CONF_PASSWORD, "")): str,
-            vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
-            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=DEFAULT_SLOW_SCAN_INTERVAL): int,
+            vol.Optional(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(int, vol.Range(min=5)),
+            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=DEFAULT_SLOW_SCAN_INTERVAL): vol.All(int, vol.Range(min=5)),
             vol.Optional(CONF_IGNORE_TLS_ERRORS, default=False): bool,
             vol.Optional(CONF_USE_HTTP, default=False): bool,
             vol.Optional(CONF_ENABLE_PHASE_SENSORS, default=True): bool,
@@ -79,16 +84,22 @@ class GaroChargerMeterOptionsFlow(config_entries.OptionsFlow):
     def __init__(self, entry: config_entries.ConfigEntry) -> None:
         self._entry = entry
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        errors = {}
         if user_input is not None:
-            return self.async_create_entry(title="Options updated", data=user_input)
+            scan = user_input.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
+            slow = user_input.get(CONF_SLOW_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL)
+            if slow < scan:
+                errors[CONF_SLOW_SCAN_INTERVAL] = "slow_must_be_gte_fast"
+            else:
+                return self.async_create_entry(title="Options updated", data=user_input)
         data = {**self._entry.data, **self._entry.options}
         schema = vol.Schema({
-            vol.Required(CONF_SCAN_INTERVAL, default=data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): int,
-            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=data.get(CONF_SLOW_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL)): int,
+            vol.Required(CONF_SCAN_INTERVAL, default=data.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)): vol.All(int, vol.Range(min=5)),
+            vol.Optional(CONF_SLOW_SCAN_INTERVAL, default=data.get(CONF_SLOW_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL)): vol.All(int, vol.Range(min=5)),
             vol.Optional(CONF_IGNORE_TLS_ERRORS, default=data.get(CONF_IGNORE_TLS_ERRORS, False)): bool,
             vol.Optional(CONF_USE_HTTP, default=data.get(CONF_USE_HTTP, False)): bool,
             vol.Optional(CONF_ENABLE_PHASE_SENSORS, default=data.get(CONF_ENABLE_PHASE_SENSORS, True)): bool,
             vol.Optional(CONF_ENABLE_LINE_VOLTAGES, default=data.get(CONF_ENABLE_LINE_VOLTAGES, False)): bool,
         })
-        return self.async_show_form(step_id="init", data_schema=schema)
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
