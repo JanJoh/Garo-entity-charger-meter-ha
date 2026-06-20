@@ -146,9 +146,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                             except Exception:
                                 _LOGGER.warning("Temp JSON decode failed URL=%s Raw=%s", temp_url, t_text[:120])
                             else:
+                                _LOGGER.debug("Temperatures raw=%r", temps)
                                 if isinstance(temps, dict):
                                     cpu = temps.get("cpu")
-                                    board = temps.get("base_board")
+                                    board = (
+                                        temps.get("base_board")
+                                        or temps.get("board")
+                                        or temps.get("baseboard")
+                                        or temps.get("pcb")
+                                        or temps.get("ambient")
+                                    )
                                     if isinstance(cpu, (int, float)):
                                         _slow_cache["cpu_temperature"] = float(cpu)
                                     if isinstance(board, (int, float)):
