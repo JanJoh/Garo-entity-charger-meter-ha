@@ -24,8 +24,10 @@ try:
 except ImportError:
     CONF_AUTH_SCHEME = "auth_scheme"
 
-# Optional separate path constant (add to const.py if desired):
 API_PATH_TEMPS = "/status/temperatures"
+API_PATH_FIRMWARE_VERSION = "/config/firmware-version"
+API_PATH_DEVICE_ID = "/config/device-id"
+API_PATH_UNIT_ID = "/config/unit-id"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +47,9 @@ SENSOR_MAP = {
     "voltage_avg": {"name":"Charger Average Voltage","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
     "cpu_temperature": {"name":"Charger CPU Temperature","device_class":SensorDeviceClass.TEMPERATURE,"unit":UnitOfTemperature.CELSIUS,"state_class":SensorStateClass.MEASUREMENT},
     "board_temperature": {"name":"Charger Board Temperature","device_class":SensorDeviceClass.TEMPERATURE,"unit":UnitOfTemperature.CELSIUS,"state_class":SensorStateClass.MEASUREMENT},
+    "firmware_version": {"name":"Firmware Version","device_class":None,"unit":None,"state_class":None},
+    "device_id": {"name":"Device ID","device_class":None,"unit":None,"state_class":None},
+    "unit_id": {"name":"Unit ID","device_class":None,"unit":None,"state_class":None},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -72,6 +77,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     scheme = "http" if use_http else "https"
     base_url = f"{scheme}://{host}{API_PATH}"
     temp_url = f"{scheme}://{host}{API_PATH_TEMPS}"
+    firmware_url = f"{scheme}://{host}{API_PATH_FIRMWARE_VERSION}"
+    device_id_url = f"{scheme}://{host}{API_PATH_DEVICE_ID}"
+    unit_id_url = f"{scheme}://{host}{API_PATH_UNIT_ID}"
+
+    def _extract_simple(payload):
+        """Pull a scalar out of a single-value JSON response (dict or bare value)."""
+        if isinstance(payload, dict):
+            return next(iter(payload.values()), None)
+        return payload
 
     session = data.get("session") or aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
 
@@ -155,6 +169,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         except Exception as e:
             _LOGGER.debug("Temperature update failed: %s", e)
 
+        # --- Firmware version, device ID, unit ID ---
+        for label, url, key in (
+            ("firmware_version", firmware_url, "firmware_version"),
+            ("device_id", device_id_url, "device_id"),
+            ("unit_id", unit_id_url, "unit_id"),
+        ):
+            try:
+                async with async_timeout.timeout(10):
+                    async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                        if resp.status == 200:
+                            try:
+                                raw = await resp.json(content_type=None)
+                            except Exception:
+                                raw = await resp.text()
+                            val = _extract_simple(raw)
+                            if val is not None:
+                                result[key] = str(val)
+                        else:
+                            _LOGGER.debug("%s endpoint status %s", label, resp.status)
+            except Exception as e:
+                _LOGGER.debug("%s fetch failed: %s", label, e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -170,7 +206,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     enable_phase = entry.options.get(CONF_ENABLE_PHASE_SENSORS, entry.data.get(CONF_ENABLE_PHASE_SENSORS, True))
     enable_line = entry.options.get(CONF_ENABLE_LINE_VOLTAGES, entry.data.get(CONF_ENABLE_LINE_VOLTAGES, False))
 
-    wanted = ["power","energy","current_total","voltage_avg","cpu_temperature","board_temperature"]
+    wanted = [
+        "power","energy","current_total","voltage_avg",
+        "cpu_temperature","board_temperature",
+        "firmware_version","device_id","unit_id",
+    ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
     if enable_line:
@@ -201,10 +241,12 @@ class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         data = self.coordinator.hass.data[DOMAIN][self._entry.entry_id]
         scheme = "http" if data.get("use_http") else "https"
+        fw = self.coordinator.data.get("firmware_version") if self.coordinator.data else None
         return DeviceInfo(
             identifiers={(DOMAIN, self._host)},
             manufacturer=MANUFACTURER,
             name=PRODUCT_NAME,
             model="EV Charger",
+            sw_version=fw,
             configuration_url=f"{scheme}://{self._host}"
         )
