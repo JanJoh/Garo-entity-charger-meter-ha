@@ -4,7 +4,7 @@ from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
-from homeassistant.helpers.entity import DeviceInfo
+from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
@@ -51,13 +51,13 @@ SENSOR_MAP = {
     "voltage_avg": {"name":"Charger Average Voltage","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
     "cpu_temperature": {"name":"Charger CPU Temperature","device_class":SensorDeviceClass.TEMPERATURE,"unit":UnitOfTemperature.CELSIUS,"state_class":SensorStateClass.MEASUREMENT},
     "board_temperature": {"name":"Charger Board Temperature","device_class":SensorDeviceClass.TEMPERATURE,"unit":UnitOfTemperature.CELSIUS,"state_class":SensorStateClass.MEASUREMENT},
-    "firmware_version": {"name":"Firmware Version","device_class":None,"unit":None,"state_class":None},
-    "device_id": {"name":"Device ID","device_class":None,"unit":None,"state_class":None},
-    "unit_id": {"name":"Unit ID","device_class":None,"unit":None,"state_class":None},
-    "cp_level_max": {"name":"CP Signal Max","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
-    "cp_level_min": {"name":"CP Signal Min","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
-    "charging_state": {"name":"Charging State","device_class":None,"unit":None,"state_class":None},
-    "pp_level": {"name":"PP Level","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT},
+    "firmware_version": {"name":"Firmware Version","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "device_id": {"name":"Device ID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "unit_id": {"name":"Unit ID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "cp_level_max": {"name":"CP Signal Max","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT,"enabled_default":False},
+    "cp_level_min": {"name":"CP Signal Min","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT,"enabled_default":False},
+    "charging_state": {"name":"Charging State","device_class":None,"unit":None,"state_class":None,"enabled_default":False},
+    "pp_level": {"name":"PP Level","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT,"enabled_default":False},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -309,6 +309,8 @@ class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
         self._attr_device_class = info.get("device_class")
         self._attr_native_unit_of_measurement = info.get("unit")
         self._attr_state_class = info.get("state_class")
+        self._attr_entity_category = info.get("entity_category")
+        self._attr_entity_registry_enabled_default = info.get("enabled_default", True)
 
     @property
     def native_value(self):
