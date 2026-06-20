@@ -1,13 +1,13 @@
 {
   "domain": "garo_entity_charger_meter",
   "name": "GARO Entity Charger Meter",
-  "version": "0.2.1",
+  "version": "1.0.0",
   "config_flow": true,
   "codeowners": [
     "@JanJoh"
   ],
-  "documentation": "https://github.com/your-github/garo-entity-charger-meter",
-  "issue_tracker": "https://github.com/your-github/garo-entity-charger-meter/issues",
+  "documentation": "https://github.com/JanJoh/Garo-entity-charger-meter-ha",
+  "issue_tracker": "https://github.com/JanJoh/Garo-entity-charger-meter-ha/issues",
   "iot_class": "local_polling",
   "integration_type": "hub",
   "loggers": [

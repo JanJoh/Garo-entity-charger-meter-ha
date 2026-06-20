@@ -8,7 +8,8 @@ from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
-    UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
+    UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature,
+    UnitOfSignalStrength
 )
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -32,6 +33,8 @@ API_PATH_CP_LEVEL_MAX = "/hal/cp-level-max"
 API_PATH_CP_LEVEL_MIN = "/hal/cp-level-min"
 API_PATH_CHARGING_STATE = "/status/charging-state"
 API_PATH_PP_LEVEL = "/hal/pp-level"
+API_PATH_NETWORK_INTERFACE = "/netconf/network-interface"
+API_PATH_CONNECTION_STATUS = "/netconf/connection-status"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +61,11 @@ SENSOR_MAP = {
     "cp_level_min": {"name":"CP Signal Min","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT,"enabled_default":False},
     "charging_state": {"name":"Charging State","device_class":None,"unit":None,"state_class":None,"enabled_default":False},
     "pp_level": {"name":"PP Level","device_class":SensorDeviceClass.VOLTAGE,"unit":UnitOfElectricPotential.VOLT,"state_class":SensorStateClass.MEASUREMENT,"enabled_default":False},
+    "cp_state": {"name":"CP State","device_class":None,"unit":None,"state_class":None,"enabled_default":True},
+    "network_interface": {"name":"Network Interface","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "ip_address": {"name":"IP Address","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "wifi_ssid": {"name":"Wi-Fi SSID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "wifi_signal": {"name":"Wi-Fi Signal","device_class":SensorDeviceClass.SIGNAL_STRENGTH,"unit":UnitOfSignalStrength.DECIBELS_MILLIWATT,"state_class":SensorStateClass.MEASUREMENT,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -92,6 +100,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     cp_min_url = f"{scheme}://{host}{API_PATH_CP_LEVEL_MIN}"
     charging_state_url = f"{scheme}://{host}{API_PATH_CHARGING_STATE}"
     pp_level_url = f"{scheme}://{host}{API_PATH_PP_LEVEL}"
+    network_interface_url = f"{scheme}://{host}{API_PATH_NETWORK_INTERFACE}"
+    connection_status_url = f"{scheme}://{host}{API_PATH_CONNECTION_STATUS}"
 
     def _extract_simple(payload):
         """Pull a scalar out of a single-value JSON response (dict or bare value)."""
@@ -227,6 +237,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             except Exception as e:
                 _LOGGER.debug("%s fetch failed: %s", label, e)
 
+        # --- Derived IEC 61851 CP state ---
+        if "cp_level_max" in result:
+            v = result["cp_level_max"]
+            if v > 10.5:
+                result["cp_state"] = "No vehicle connected"
+            elif v > 7.5:
+                result["cp_state"] = "Vehicle connected"
+            elif v > 4.5:
+                result["cp_state"] = "Charging"
+            elif v > 1.5:
+                result["cp_state"] = "Charging (ventilation required)"
+            elif v > -1.5:
+                result["cp_state"] = "No power"
+            else:
+                result["cp_state"] = "Fault"
+
         # --- Charging state ---
         try:
             async with async_timeout.timeout(10):
@@ -266,6 +292,55 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         except Exception as e:
             _LOGGER.debug("pp_level fetch failed: %s", e)
 
+        # --- Network interface and connection status ---
+        try:
+            async with async_timeout.timeout(10):
+                async with session.get(network_interface_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            raw = await resp.text()
+                        val = _extract_simple(raw)
+                        _LOGGER.debug("network_interface=%r (raw=%r)", val, raw)
+                        if val is not None:
+                            result["network_interface"] = str(val)
+                    else:
+                        _LOGGER.debug("network_interface endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("network_interface fetch failed: %s", e)
+
+        try:
+            async with async_timeout.timeout(10):
+                async with session.get(connection_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.debug("connection_status JSON decode failed")
+                        else:
+                            _LOGGER.debug("connection_status raw=%r", raw)
+                            if isinstance(raw, dict):
+                                for key in ("ip_address", "ip", "address", "ipv4"):
+                                    if key in raw:
+                                        result["ip_address"] = str(raw[key])
+                                        break
+                                for key in ("ssid", "SSID", "wifi_ssid"):
+                                    if key in raw:
+                                        result["wifi_ssid"] = str(raw[key])
+                                        break
+                                for key in ("rssi", "RSSI", "signal", "signal_strength", "signal_level"):
+                                    if key in raw:
+                                        try:
+                                            result["wifi_signal"] = float(raw[key])
+                                        except (ValueError, TypeError):
+                                            pass
+                                        break
+                    else:
+                        _LOGGER.debug("connection_status endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("connection_status fetch failed: %s", e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -287,6 +362,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "firmware_version","device_id","unit_id",
         "cp_level_max","cp_level_min",
         "charging_state","pp_level",
+        "network_interface","ip_address","wifi_ssid","wifi_signal",
     ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
