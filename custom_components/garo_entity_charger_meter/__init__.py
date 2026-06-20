@@ -13,6 +13,7 @@ from .const import (
     CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL,
     API_PATH
 )
+from . import sensor as _sensor_module  # pre-import to avoid blocking import in Python 3.14+
 
 _LOGGER = logging.getLogger(__name__)
 
