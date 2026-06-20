@@ -6,6 +6,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client, device_registry as dr
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
@@ -423,10 +424,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     data["slow_coordinator"] = slow_coordinator
     await slow_coordinator.async_config_entry_first_refresh()
     await fast_coordinator.async_config_entry_first_refresh()
-    # Without a listener the coordinator never schedules recurring updates.
-    # Entities subscribe to fast_coordinator, so slow_coordinator needs a
-    # no-op listener to keep its timer alive.
-    entry.async_on_unload(slow_coordinator.async_add_listener(lambda: None))
+    # DataUpdateCoordinator only self-schedules while it has listeners.
+    # Entities subscribe to fast_coordinator, so drive the slow coordinator
+    # with an independent HA interval timer instead.
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            lambda _now: hass.async_create_task(slow_coordinator.async_refresh()),
+            timedelta(seconds=slow_scan_interval),
+        )
+    )
 
     enable_phase = entry.options.get(CONF_ENABLE_PHASE_SENSORS, entry.data.get(CONF_ENABLE_PHASE_SENSORS, True))
     enable_line = entry.options.get(CONF_ENABLE_LINE_VOLTAGES, entry.data.get(CONF_ENABLE_LINE_VOLTAGES, False))
