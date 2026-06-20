@@ -5,7 +5,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
-from homeassistant.helpers import aiohttp_client
+from homeassistant.helpers import aiohttp_client, device_registry as dr
 from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
 from homeassistant.const import (
     UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
@@ -34,6 +34,8 @@ API_PATH_CHARGING_STATE = "/status/charging-state"
 API_PATH_PP_LEVEL = "/hal/pp-level"
 API_PATH_NETWORK_INTERFACE = "/netconf/network-interface"
 API_PATH_CONNECTION_STATUS = "/netconf/connection-status"
+API_PATH_SIM_INFO = "/status/sim-info"
+API_PATH_PLC_STATUS = "/plc/device-status"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,6 +67,10 @@ SENSOR_MAP = {
     "ip_address": {"name":"IP Address","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "wifi_ssid": {"name":"Wi-Fi SSID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "wifi_signal": {"name":"Wi-Fi Signal","device_class":SensorDeviceClass.SIGNAL_STRENGTH,"unit":"dBm","state_class":SensorStateClass.MEASUREMENT,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "sim_iccid": {"name":"SIM ICCID","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "sim_operator": {"name":"SIM Operator","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "plc_firmware_version": {"name":"PLC Firmware Version","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    "plc_zero_cross": {"name":"PLC Zero Cross","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -101,6 +107,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     pp_level_url = f"{scheme}://{host}{API_PATH_PP_LEVEL}"
     network_interface_url = f"{scheme}://{host}{API_PATH_NETWORK_INTERFACE}"
     connection_status_url = f"{scheme}://{host}{API_PATH_CONNECTION_STATUS}"
+    sim_info_url = f"{scheme}://{host}{API_PATH_SIM_INFO}"
+    plc_status_url = f"{scheme}://{host}{API_PATH_PLC_STATUS}"
 
     def _extract_simple(payload):
         """Pull a scalar out of a single-value JSON response (dict or bare value)."""
@@ -340,6 +348,52 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         except Exception as e:
             _LOGGER.debug("connection_status fetch failed: %s", e)
 
+        # --- SIM card info ---
+        try:
+            async with asyncio.timeout(10):
+                async with session.get(sim_info_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.debug("sim_info JSON decode failed")
+                        else:
+                            _LOGGER.debug("sim_info raw=%r", raw)
+                            if isinstance(raw, dict):
+                                for k in ("iccid", "ICCID"):
+                                    if k in raw:
+                                        result["sim_iccid"] = str(raw[k])
+                                        break
+                                for k in ("operator", "carrier", "network", "plmn"):
+                                    if k in raw:
+                                        result["sim_operator"] = str(raw[k])
+                                        break
+                    else:
+                        _LOGGER.debug("sim_info endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("sim_info fetch failed: %s", e)
+
+        # --- PLC device status ---
+        try:
+            async with asyncio.timeout(10):
+                async with session.get(plc_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        try:
+                            raw = await resp.json(content_type=None)
+                        except Exception:
+                            _LOGGER.debug("plc_device_status JSON decode failed")
+                        else:
+                            _LOGGER.debug("plc_device_status raw=%r", raw)
+                            if isinstance(raw, dict):
+                                if "firmware_version" in raw:
+                                    result["plc_firmware_version"] = str(raw["firmware_version"])
+                                if "zero_cross" in raw:
+                                    result["plc_zero_cross"] = str(raw["zero_cross"])
+                    else:
+                        _LOGGER.debug("plc_device_status endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("plc_device_status fetch failed: %s", e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -362,6 +416,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "cp_level_max","cp_level_min","cp_state",
         "charging_state","pp_level",
         "network_interface","ip_address","wifi_ssid","wifi_signal",
+        "sim_iccid","sim_operator",
+        "plc_firmware_version","plc_zero_cross",
     ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
@@ -395,12 +451,25 @@ class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
     def device_info(self):
         data = self.coordinator.hass.data[DOMAIN][self._entry.entry_id]
         scheme = "http" if data.get("use_http") else "https"
-        fw = self.coordinator.data.get("firmware_version") if self.coordinator.data else None
+        coord_data = self.coordinator.data or {}
+        fw = coord_data.get("firmware_version")
+        device_id = coord_data.get("device_id")
+        unit_id = coord_data.get("unit_id")
+
+        connections: set = set()
+        if unit_id and "-" in unit_id:
+            mac_raw = unit_id.split("-")[-1]
+            if len(mac_raw) == 12 and all(c in "0123456789ABCDEFabcdef" for c in mac_raw):
+                mac = ":".join(mac_raw[i:i+2] for i in range(0, 12, 2))
+                connections.add((dr.CONNECTION_NETWORK_MAC, mac.upper()))
+
         return DeviceInfo(
-            identifiers={(DOMAIN, self._host)},
+            identifiers={(DOMAIN, device_id or self._host)},
+            connections=connections,
             manufacturer=MANUFACTURER,
             name=PRODUCT_NAME,
             model="EV Charger",
+            serial_number=device_id,
             sw_version=fw,
             configuration_url=f"{scheme}://{self._host}"
         )
