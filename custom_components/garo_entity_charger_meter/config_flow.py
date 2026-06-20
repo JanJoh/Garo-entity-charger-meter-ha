@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, aiohttp, async_timeout, voluptuous as vol
+import logging, asyncio, aiohttp, voluptuous as vol
 from typing import Any
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
@@ -27,7 +27,7 @@ async def async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> Non
     scheme = "http" if use_http else "https"
     session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=not ignore_tls))
     try:
-        async with async_timeout.timeout(10):
+        async with asyncio.timeout(10):
             async with session.get(f"{scheme}://{host}/", auth=aiohttp.BasicAuth(username, password)) as resp:
                 if resp.status in (401,403): raise InvalidAuth
                 if resp.status >= 400: raise CannotConnect(f"HTTP {resp.status}")

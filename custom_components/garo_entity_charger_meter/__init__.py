@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, asyncio, async_timeout, aiohttp
+import logging, asyncio, aiohttp
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import aiohttp_client
@@ -33,7 +33,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     session = aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
     try:
-        async with async_timeout.timeout(15):
+        async with asyncio.timeout(15):
             async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
                 txt = await resp.text()
                 if resp.status in (401,403):

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging, async_timeout, aiohttp
+import logging, asyncio, aiohttp
 from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -115,7 +115,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         result: dict[str, float] = {}
         # --- Energy / electrical metrics ---
         try:
-            async with async_timeout.timeout(15):
+            async with asyncio.timeout(15):
                 async with session.get(base_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     text = await resp.text()
                     if resp.status != 200:
@@ -170,7 +170,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         # --- Temperature metrics ---
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(temp_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     t_text = await resp.text()
                     if resp.status == 200:
@@ -198,7 +198,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ("unit_id", unit_id_url, "unit_id"),
         ):
             try:
-                async with async_timeout.timeout(10):
+                async with asyncio.timeout(10):
                     async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
                         if resp.status == 200:
                             try:
@@ -219,7 +219,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ("cp_level_min", cp_min_url, "cp_level_min"),
         ):
             try:
-                async with async_timeout.timeout(10):
+                async with asyncio.timeout(10):
                     async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
                         if resp.status == 200:
                             try:
@@ -255,7 +255,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         # --- Charging state ---
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(charging_state_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     if resp.status == 200:
                         try:
@@ -273,7 +273,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         # --- PP level (Proximity Pilot — cable connection/type) ---
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(pp_level_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     if resp.status == 200:
                         try:
@@ -294,7 +294,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
         # --- Network interface and connection status ---
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(network_interface_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     if resp.status == 200:
                         try:
@@ -311,7 +311,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             _LOGGER.debug("network_interface fetch failed: %s", e)
 
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(connection_status_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     if resp.status == 200:
                         try:
