@@ -1,0 +1,34 @@
+name: Bug report
+description: Something isn't working
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Integration version
+      placeholder: "e.g. 1.1.8"
+    validations:
+      required: true
+
+  - type: input
+    id: ha_version
+    attributes:
+      label: Home Assistant version
+      placeholder: "e.g. 2024.6.0"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: What did you expect, and what happened instead?
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: "Enable debug logging: add the following to configuration.yaml, restart, reproduce the issue, then paste the log here.\n\nlogger:\n  logs:\n    custom_components.garo_entity_charger_meter: debug"
+      render: text
