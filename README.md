@@ -80,6 +80,20 @@ Intervals can be changed after setup via **Settings → Devices & Services → G
 | Charging State | Raw GARO charging state code (e.g. `B2`) |
 | CP Signal Max / Min | Control Pilot voltage in volts |
 | PP Level | Proximity Pilot voltage — indicates cable type/capacity |
+| Charger Offered Current | A | Current the pilot signal offers the car right now (OCPP `Current.Offered`, outlet). Attributes `outlet`, `inlet`, `body`. |
+
+### Charging decisions (from the device log)
+
+Some facts exist only in the charger's own log (`/log/garoevse.log`), not in any REST endpoint. The integration follows the log with HTTP Range requests — 256 kB on start, then only the lines appended since the last poll — and handles log rotation. Turn this off under **Configure → Read charging decisions from the device log** (the entities are then removed).
+
+| Sensor | Notes |
+|---|---|
+| Charger Current Limit | A. The charger's own maximum, the lowest of all its limits. Attributes list every factor (`DLM`, `ConfMax`, `Bracket`, `FixCab`, `PP`, `SC`, `Derating`, `CPUOverTemp`, `OwnerMin`, …), `below_minimum` and `logged_at`. |
+| Charger Limiting Factor | Which factor sets the limit, e.g. `DLM` (load balancer) or `ConfMax` (configured maximum). When the limit drops below `OwnerMin` (6 A) the charger pauses (`SuspendedEVSE`). |
+| Charger Relay Mode | Active relay configuration, e.g. *1-phase (L1)*, *3-phase* or *Off*. |
+| Charger Connector Status | OCPP connector status: `Available`, `Charging`, `SuspendedEV` (car paused), `SuspendedEVSE` (charger paused), … |
+
+These sensors keep their last value across Home Assistant restarts until the log shows a new one.
 
 ### Diagnostics & device info (slow poll, disabled by default)
 

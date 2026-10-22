@@ -41,11 +41,13 @@
           "ignore_tls_errors": "Ignore TLS certificate errors",
           "use_http": "Use HTTP instead of HTTPS",
           "enable_phase_sensors": "Enable per-phase sensors (L1/L2/L3 current and voltage)",
-          "enable_line_voltages": "Enable line-to-line voltage sensors (L1-L2, L2-L3, L3-L1)"
+          "enable_line_voltages": "Enable line-to-line voltage sensors (L1-L2, L2-L3, L3-L1)",
+          "enable_log_sensors": "Read charging decisions from the device log"
         },
         "data_description": {
           "scan_interval": "How often to fetch live data: power, current, voltage, charging state, CP/PP levels. Default: 15 s.",
-          "slow_scan_interval": "How often to fetch data that rarely changes: temperatures, firmware version, device ID, network info, SIM and PLC status. Default: 300 s."
+          "slow_scan_interval": "How often to fetch data that rarely changes: temperatures, firmware version, device ID, network info, SIM and PLC status. Default: 300 s.",
+          "enable_log_sensors": "Adds Current Limit, Limiting Factor, Relay Mode and Connector Status, read from the charger log with small incremental requests."
         }
       }
     }

@@ -12,6 +12,8 @@ CONF_IGNORE_TLS_ERRORS = "ignore_tls_errors"
 CONF_ENABLE_PHASE_SENSORS = "enable_phase_sensors"
 CONF_ENABLE_LINE_VOLTAGES = "enable_line_voltages"
 CONF_USE_HTTP = "use_http"
+CONF_ENABLE_LOG_SENSORS = "enable_log_sensors"
+DEFAULT_ENABLE_LOG_SENSORS = True
 
 SERVICE_REFRESH = "refresh"
 

@@ -4,6 +4,7 @@ from typing import Any
 from homeassistant import config_entries
 from homeassistant.core import callback, HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import aiohttp_client
 
 from .const import (
     DOMAIN,
@@ -11,7 +12,8 @@ from .const import (
     CONF_SCAN_INTERVAL, CONF_SLOW_SCAN_INTERVAL,
     CONF_IGNORE_TLS_ERRORS,
     CONF_ENABLE_PHASE_SENSORS, CONF_ENABLE_LINE_VOLTAGES,
-    CONF_USE_HTTP, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL
+    CONF_USE_HTTP, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL,
+    CONF_ENABLE_LOG_SENSORS, DEFAULT_ENABLE_LOG_SENSORS,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ async def async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> Non
     ignore_tls = data.get(CONF_IGNORE_TLS_ERRORS, False)
     use_http = data.get(CONF_USE_HTTP, False)
     scheme = "http" if use_http else "https"
-    session = aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=not ignore_tls))
+    session = aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
     try:
         async with asyncio.timeout(10):
             async with session.get(f"{scheme}://{host}/", auth=aiohttp.BasicAuth(username, password)) as resp:
@@ -34,8 +36,6 @@ async def async_validate_input(hass: HomeAssistant, data: dict[str, Any]) -> Non
                 if resp.status >= 400: raise CannotConnect(f"HTTP {resp.status}")
     except InvalidAuth: raise
     except Exception as err: raise CannotConnect(err) from err
-    finally:
-        await session.close()
 
 class GaroChargerMeterConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
@@ -100,6 +100,7 @@ class GaroChargerMeterOptionsFlow(config_entries.OptionsFlow):
             vol.Optional(CONF_USE_HTTP, default=data.get(CONF_USE_HTTP, False)): bool,
             vol.Optional(CONF_ENABLE_PHASE_SENSORS, default=data.get(CONF_ENABLE_PHASE_SENSORS, True)): bool,
             vol.Optional(CONF_ENABLE_LINE_VOLTAGES, default=data.get(CONF_ENABLE_LINE_VOLTAGES, False)): bool,
+            vol.Optional(CONF_ENABLE_LOG_SENSORS, default=data.get(CONF_ENABLE_LOG_SENSORS, DEFAULT_ENABLE_LOG_SENSORS)): bool,
         })
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 

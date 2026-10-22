@@ -5,8 +5,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
-from homeassistant.helpers import aiohttp_client, device_registry as dr
-from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass
+from homeassistant.helpers import aiohttp_client, device_registry as dr, entity_registry as er
+from homeassistant.components.sensor import SensorEntity, SensorDeviceClass, SensorStateClass, RestoreSensor
 from homeassistant.const import (
     UnitOfElectricCurrent, UnitOfElectricPotential, UnitOfPower, UnitOfEnergy, UnitOfTemperature
 )
@@ -17,8 +17,10 @@ from .const import (
     CONF_SCAN_INTERVAL, CONF_SLOW_SCAN_INTERVAL,
     CONF_IGNORE_TLS_ERRORS, CONF_ENABLE_PHASE_SENSORS,
     CONF_ENABLE_LINE_VOLTAGES, CONF_USE_HTTP, MANUFACTURER, PRODUCT_NAME,
-    API_PATH, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL
+    API_PATH, DEFAULT_SCAN_INTERVAL, DEFAULT_SLOW_SCAN_INTERVAL,
+    CONF_ENABLE_LOG_SENSORS, DEFAULT_ENABLE_LOG_SENSORS,
 )
+from .logtail import LOG_PATH, LogFollower, ChargerLogState, relay_mode_name
 
 try:
     from .const import CONF_AUTH_SCHEME  # optional extension
@@ -37,6 +39,7 @@ API_PATH_NETWORK_INTERFACE = "/netconf/network-interface"
 API_PATH_CONNECTION_STATUS = "/netconf/connection-status"
 API_PATH_SIM_INFO = "/status/sim-info"
 API_PATH_PLC_STATUS = "/plc/device-status"
+API_PATH_METERVALUE_SAMPLE = "/status/metervalue-sample"
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +75,16 @@ SENSOR_MAP = {
     "sim_operator": {"name":"SIM Operator","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "plc_firmware_version": {"name":"PLC Firmware Version","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
     "plc_zero_cross": {"name":"PLC Zero Cross","device_class":None,"unit":None,"state_class":None,"entity_category":EntityCategory.DIAGNOSTIC,"enabled_default":False},
+    # Current the pilot signal offers the car right now (OCPP Current.Offered, location Outlet).
+    "offered_current": {"name":"Charger Offered Current","device_class":SensorDeviceClass.CURRENT,"unit":UnitOfElectricCurrent.AMPERE,"state_class":SensorStateClass.MEASUREMENT},
+}
+
+# Read from the device log (see logtail.py). Values are restored across restarts.
+LOG_SENSOR_MAP = {
+    "current_limit":    {"name": "Charger Current Limit",    "icon": "mdi:speedometer-medium"},
+    "limiting_factor":  {"name": "Charger Limiting Factor",  "icon": "mdi:filter-variant"},
+    "relay_mode":       {"name": "Charger Relay Mode",       "icon": "mdi:electric-switch"},
+    "connector_status": {"name": "Charger Connector Status", "icon": "mdi:ev-plug-type2"},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -80,9 +93,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     def opt(key):
         return entry.options.get(key, entry.data.get(key))
 
-    host = opt(CONF_HOST)
-    username = opt(CONF_USERNAME)
-    password = opt(CONF_PASSWORD)
+    # Host and credentials are set at setup and kept in entry.data (redacted by HA).
+    host = entry.data.get(CONF_HOST)
+    username = entry.data.get(CONF_USERNAME)
+    password = entry.data.get(CONF_PASSWORD)
     scan_interval = opt(CONF_SCAN_INTERVAL) or DEFAULT_SCAN_INTERVAL
     slow_scan_interval = opt(CONF_SLOW_SCAN_INTERVAL) or DEFAULT_SLOW_SCAN_INTERVAL
     ignore_tls = opt(CONF_IGNORE_TLS_ERRORS)
@@ -111,6 +125,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     connection_status_url = f"{scheme}://{host}{API_PATH_CONNECTION_STATUS}"
     sim_info_url = f"{scheme}://{host}{API_PATH_SIM_INFO}"
     plc_status_url = f"{scheme}://{host}{API_PATH_PLC_STATUS}"
+    metervalue_url = f"{scheme}://{host}{API_PATH_METERVALUE_SAMPLE}"
 
     def _extract_simple(payload):
         """Pull a scalar out of a single-value JSON response (dict or bare value)."""
@@ -119,6 +134,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         return payload
 
     session = data.get("session") or aiohttp_client.async_get_clientsession(hass, verify_ssl=not ignore_tls)
+
+    enable_log = opt(CONF_ENABLE_LOG_SENSORS)
+    if enable_log is None:
+        enable_log = DEFAULT_ENABLE_LOG_SENSORS
+    log_follower = LogFollower(f"{scheme}://{host}{LOG_PATH}", aiohttp.BasicAuth(username, password)) if enable_log else None
+    log_state = ChargerLogState() if enable_log else None
+    data["log_follower"] = log_follower
+    data["log_state"] = log_state
 
     # How many fast ticks between slow fetches. Initialized so slow fetch fires on tick 1.
     _slow_modulo = max(1, round(slow_scan_interval / scan_interval))
@@ -420,6 +443,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         except Exception as e:
             _LOGGER.debug("pp_level fetch failed: %s", e)
 
+        # --- Offered current (what the pilot signal allows the car to draw) ---
+        try:
+            async with asyncio.timeout(10):
+                async with session.get(metervalue_url, auth=aiohttp.BasicAuth(username, password)) as resp:
+                    if resp.status == 200:
+                        raw = await resp.json(content_type=None)
+                        offered = {}
+                        for sv in (raw or {}).get("sampledValue", []):
+                            if sv.get("measurand") == "Current.Offered":
+                                try:
+                                    offered[sv.get("location") or "Outlet"] = float(sv["value"])
+                                except (KeyError, ValueError, TypeError):
+                                    pass
+                        if "Outlet" in offered:
+                            result["offered_current"] = offered["Outlet"]
+                        result["offered_current_locations"] = offered
+                    else:
+                        _LOGGER.debug("metervalue-sample endpoint status %s", resp.status)
+        except Exception as e:
+            _LOGGER.debug("metervalue-sample fetch failed: %s", e)
+
+        # --- Device log (current limit, limiting factor, relay mode, connector status) ---
+        if log_follower is not None:
+            try:
+                async with asyncio.timeout(15):
+                    log_state.feed(await log_follower.poll(session))
+            except Exception as e:
+                _LOGGER.debug("Log poll failed: %s", e)
+
         return result
 
     coordinator = DataUpdateCoordinator(
@@ -444,6 +496,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         "network_interface","ip_address","wifi_ssid","wifi_signal",
         "sim_iccid","sim_operator",
         "plc_firmware_version","plc_zero_cross",
+        "offered_current",
     ]
     if enable_phase:
         wanted += ["current_l1","current_l2","current_l3","voltage_l1","voltage_l2","voltage_l3"]
@@ -451,6 +504,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         wanted += ["voltage_l1_l2","voltage_l2_l3","voltage_l3_l1"]
 
     entities = [GaroChargerMeterSensor(coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
+    if log_state is not None:
+        entities += [GaroChargerLogSensor(coordinator, entry, host, k, log_state) for k in LOG_SENSOR_MAP]
+    else:
+        # Log sensors turned off in options: drop the entities instead of leaving them unavailable.
+        registry = er.async_get(hass)
+        for k in LOG_SENSOR_MAP:
+            entity_id = registry.async_get_entity_id("sensor", DOMAIN, f"{host}_{k}")
+            if entity_id:
+                registry.async_remove(entity_id)
     async_add_entities(entities)
 
 class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
@@ -474,28 +536,96 @@ class GaroChargerMeterSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.data.get(self._key)
 
     @property
+    def extra_state_attributes(self):
+        if self._key == "offered_current":
+            locations = (self.coordinator.data or {}).get("offered_current_locations") or {}
+            return {f"{loc.lower()}": val for loc, val in locations.items()} or None
+        return None
+
+    @property
     def device_info(self):
-        data = self.coordinator.hass.data[DOMAIN][self._entry.entry_id]
-        scheme = "http" if data.get("use_http") else "https"
-        coord_data = self.coordinator.data or {}
-        fw = coord_data.get("firmware_version")
-        device_id = coord_data.get("device_id")
-        unit_id = coord_data.get("unit_id")
+        return _device_info(self.coordinator, self._entry, self._host)
 
-        connections: set = set()
-        if unit_id and "-" in unit_id:
-            mac_raw = unit_id.split("-")[-1]
-            if len(mac_raw) == 12 and all(c in "0123456789ABCDEFabcdef" for c in mac_raw):
-                mac = ":".join(mac_raw[i:i+2] for i in range(0, 12, 2))
-                connections.add((dr.CONNECTION_NETWORK_MAC, mac.upper()))
 
-        return DeviceInfo(
-            identifiers={(DOMAIN, device_id or self._host)},
-            connections=connections,
-            manufacturer=MANUFACTURER,
-            name=PRODUCT_NAME,
-            model="EV Charger",
-            serial_number=device_id,
-            sw_version=fw,
-            configuration_url=f"{scheme}://{self._host}"
-        )
+class GaroChargerLogSensor(CoordinatorEntity, RestoreSensor):
+    """Value taken from the charger log. Restored after a restart until the log shows a new one."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, coordinator, entry, host, key, log_state: ChargerLogState):
+        super().__init__(coordinator)
+        self._key = key
+        self._entry = entry
+        self._host = host
+        self._log = log_state
+        self._restored = None
+        info = LOG_SENSOR_MAP[key]
+        self._attr_name = info["name"]
+        self._attr_icon = info["icon"]
+        self._attr_unique_id = f"{host}_{key}"
+        if key == "current_limit":
+            self._attr_device_class = SensorDeviceClass.CURRENT
+            self._attr_native_unit_of_measurement = UnitOfElectricCurrent.AMPERE
+            self._attr_state_class = SensorStateClass.MEASUREMENT
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_sensor_data()) is not None:
+            self._restored = last.native_value
+
+    @property
+    def native_value(self):
+        log = self._log
+        value = {
+            "current_limit": log.current_limit,
+            "limiting_factor": log.limiting_factor,
+            "relay_mode": relay_mode_name(log.relay_mode),
+            "connector_status": log.connector_status,
+        }[self._key]
+        return self._restored if value is None else value
+
+    @property
+    def extra_state_attributes(self):
+        log = self._log
+        if self._key in ("current_limit", "limiting_factor"):
+            if not log.limit_factors:
+                return None
+            return {**log.limit_factors, "below_minimum": log.below_minimum,
+                    "logged_at": log.limit_logged_at.isoformat() if log.limit_logged_at else None}
+        if self._key == "relay_mode" and log.relay_mode:
+            return {"raw": log.relay_mode,
+                    "logged_at": log.relay_logged_at.isoformat() if log.relay_logged_at else None}
+        if self._key == "connector_status" and log.status_logged_at:
+            return {"logged_at": log.status_logged_at.isoformat()}
+        return None
+
+    @property
+    def device_info(self):
+        return _device_info(self.coordinator, self._entry, self._host)
+
+
+def _device_info(coordinator, entry, host):
+    data = coordinator.hass.data[DOMAIN][entry.entry_id]
+    scheme = "http" if data.get("use_http") else "https"
+    coord_data = coordinator.data or {}
+    fw = coord_data.get("firmware_version")
+    device_id = coord_data.get("device_id")
+    unit_id = coord_data.get("unit_id")
+
+    connections: set = set()
+    if unit_id and "-" in unit_id:
+        mac_raw = unit_id.split("-")[-1]
+        if len(mac_raw) == 12 and all(c in "0123456789ABCDEFabcdef" for c in mac_raw):
+            mac = ":".join(mac_raw[i:i+2] for i in range(0, 12, 2))
+            connections.add((dr.CONNECTION_NETWORK_MAC, mac.upper()))
+
+    return DeviceInfo(
+        identifiers={(DOMAIN, device_id or host)},
+        connections=connections,
+        manufacturer=MANUFACTURER,
+        name=PRODUCT_NAME,
+        model="EV Charger",
+        serial_number=device_id,
+        sw_version=fw,
+        configuration_url=f"{scheme}://{host}"
+    )
