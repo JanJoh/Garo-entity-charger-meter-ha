@@ -93,7 +93,7 @@ Some facts exist only in the charger's own log (`/log/garoevse.log`), not in any
 | Charger Relay Mode | Active relay configuration, e.g. *1-phase (L1)*, *3-phase* or *Off*. |
 | Charger Connector Status | OCPP connector status: `Available`, `Charging`, `SuspendedEV` (car paused), `SuspendedEVSE` (charger paused), … |
 
-These sensors keep their last value across Home Assistant restarts until the log shows a new one.
+The charger only logs the limit and the connector status when they change. On startup the integration therefore searches back once — through the current log and, if it was rotated recently, `garoevse.log.1.gz` — so these sensors have a value straight away. They also keep their last value across Home Assistant restarts.
 
 ### Diagnostics & device info (slow poll, disabled by default)
 

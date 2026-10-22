@@ -93,3 +93,43 @@ async def test_diagnostics_redacts(hass: HomeAssistant, aioclient_mock):
     diag = await async_get_config_entry_diagnostics(hass, entry)
     assert diag["entry"]["password"] == "**REDACTED**"
     assert diag["log"]["limiting_factor"] == "DLM"
+
+
+async def test_backfill_from_rotated_log(hass: HomeAssistant, aioclient_mock):
+    """Limit and status logged before the latest rotation are found in .1.gz."""
+    import gzip
+    from custom_components.garo_entity_charger_meter.logtail import LogFollower
+
+    url = f"{BASE}/log/garoevse.log"
+    current = (b"x" * 50 + b"\n"
+               b"2026-10-22T13:00:00+00:00 charging:2080 INFO Best charge mode check: Trying to keep relay mode=mode_1ph_l1_n for time=75 s\n")
+    rotated = gzip.compress(
+        b"2026-10-22T10:20:54+00:00 status_handler:9 INFO Status changed, connector id: 1, status=Charging\n"
+        b"2026-10-22T12:00:00+00:00 charging:1170 INFO max_current=11, DLM=11, ConfMax=12, OwnerMin=6\n"
+        b"2026-10-22T12:25:17+00:00 charging:1170 INFO max_current=12, DLM=12, ConfMax=12, OwnerMin=6\n"
+        b"2026-10-22T12:30:00+00:00 status_handler:9 INFO Status changed, connector id: 1, status=SuspendedEV\n")
+    aioclient_mock.get(url, content=current, status=206,
+                       headers={"Content-Range": f"bytes 0-{len(current) - 1}/{len(current)}"})
+    aioclient_mock.get(f"{url}.1.gz", content=rotated)
+
+    session = aioclient_mock.create_session(hass.loop)
+    try:
+        import aiohttp
+        follower, state = LogFollower(url, aiohttp.BasicAuth("u", "p")), ChargerLogState()
+        state.feed(await follower.poll(session))
+        assert state.relay_mode == "mode_1ph_l1_n" and state.missing()
+        await follower.read_backwards(session, state)
+        assert state.current_limit == 12          # newest, not the older 11
+        assert state.connector_status == "SuspendedEV"
+        assert not state.missing()
+    finally:
+        await session.close()
+
+
+def test_backfill_never_overwrites_newer_values():
+    st = ChargerLogState()
+    st.feed(["2026-10-22T12:00:00+00:00 status_handler:9 INFO Status changed, connector id: 1, status=Charging"])
+    st.backfill(["2026-10-22T11:00:00+00:00 status_handler:9 INFO Status changed, connector id: 1, status=Available",
+                 "2026-10-22T10:00:00+00:00 charging:1 INFO max_current=8, DLM=8, OwnerMin=6"])
+    assert st.connector_status == "Charging"
+    assert st.current_limit == 8

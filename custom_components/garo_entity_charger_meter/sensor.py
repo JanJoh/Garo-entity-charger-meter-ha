@@ -142,6 +142,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     log_state = ChargerLogState() if enable_log else None
     data["log_follower"] = log_follower
     data["log_state"] = log_state
+    _backfilled = [False]
 
     # How many fast ticks between slow fetches. Initialized so slow fetch fires on tick 1.
     _slow_modulo = max(1, round(slow_scan_interval / scan_interval))
@@ -471,6 +472,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                     log_state.feed(await log_follower.poll(session))
             except Exception as e:
                 _LOGGER.debug("Log poll failed: %s", e)
+            # Once, after the first tail read: look further back for values the tail lacked
+            # (the charger only logs the limit and status when they change).
+            if not _backfilled[0] and log_follower.tail_start is not None:
+                _backfilled[0] = True
+                if log_state.missing():
+                    try:
+                        async with asyncio.timeout(60):
+                            n = await log_follower.read_backwards(session, log_state)
+                        _LOGGER.debug("Log backfill read %d bytes, still missing=%s", n, log_state.missing())
+                    except Exception as e:
+                        _LOGGER.debug("Log backfill failed: %s", e)
 
         return result
 
