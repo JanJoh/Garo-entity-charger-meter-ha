@@ -1,9 +1,6 @@
 {
   "domain": "garo_entity_charger_meter",
   "name": "GARO Entity Charger Meter",
-  "categories": [
-    "energy.ev_charging"
-  ],
   "codeowners": [
     "@JanJoh"
   ],
