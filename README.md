@@ -89,7 +89,7 @@ Some facts exist only in the charger's own log (`/log/garoevse.log`), not in any
 | Sensor | Notes |
 |---|---|
 | Charger Current Limit | A. The charger's own maximum, the lowest of all its limits. Attributes list every factor (`DLM`, `ConfMax`, `Bracket`, `FixCab`, `PP`, `SC`, `Derating`, `CPUOverTemp`, `OwnerMin`, …), `below_minimum` and `logged_at`. |
-| Charger Limiting Factor | Which factor sets the limit, e.g. `DLM` (load balancer) or `ConfMax` (configured maximum). `Derating` is the charger's own thermal limit. When the limit drops below `OwnerMin` (6 A) the charger pauses (`SuspendedEVSE`). |
+| Charger Limiting Factor | Which factor sets the limit, e.g. `DLM` (load balancer) or `ConfMax` (configured maximum). `Derating` is, as far as we can tell, the charger's own thermal limit (not documented by GARO). When the limit drops below `OwnerMin` (6 A) the charger pauses (`SuspendedEVSE`). |
 | Charger Relay Mode | Active relay configuration, e.g. *1-phase (L1)*, *3-phase* or *Off*. |
 | Charger Connector Status | OCPP connector status: `Available`, `Charging`, `SuspendedEV` (car paused), `SuspendedEVSE` (charger paused), … |
 | Charger Overload Pauses | Count of pauses caused by the charger's overload protection: the car drew more than 10 % above the offered current for a few seconds (typically right after the load balancer lowered the limit), so the charger paused for about a minute. Total increasing, restored across restarts; attribute `last_pause`. While such a pause is on, Limiting Factor shows `Overload protection`. |
