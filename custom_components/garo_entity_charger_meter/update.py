@@ -42,6 +42,7 @@ class GaroFirmwareUpdate(CoordinatorEntity, UpdateEntity):
     _attr_title = "GARO Entity firmware"
     # Progress only; no INSTALL feature, HA never sends the unit an update command.
     _attr_supported_features = UpdateEntityFeature.PROGRESS
+    _attr_icon = "mdi:memory"
 
     def __init__(self, coordinator, entry, host, firmware: FirmwareState):
         super().__init__(coordinator)
@@ -74,7 +75,7 @@ class GaroFirmwareUpdate(CoordinatorEntity, UpdateEntity):
 
     @property
     def entity_picture(self) -> str | None:
-        """No brand picture: use HA's standard update icons (package / package-up)."""
+        """No brand picture, so the icon below is shown."""
         return None
 
     @property
