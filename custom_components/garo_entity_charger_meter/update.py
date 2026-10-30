@@ -73,6 +73,11 @@ class GaroFirmwareUpdate(CoordinatorEntity, UpdateEntity):
         return fw.version is not None and installed is not None and fw.version != installed
 
     @property
+    def entity_picture(self) -> str | None:
+        """No brand picture: use HA's standard update icons (package / package-up)."""
+        return None
+
+    @property
     def installed_version(self) -> str | None:
         return (self.coordinator.data or {}).get("firmware_version")
 

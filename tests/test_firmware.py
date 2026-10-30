@@ -77,6 +77,7 @@ async def test_update_available(hass: HomeAssistant, aioclient_mock):
     assert st.attributes["release_summary"] == "Downloaded and verified, waiting to install"
     assert st.attributes["firmware_status"] == "SignatureVerified"
     assert st.attributes["supported_features"] == 4  # PROGRESS only: reported, never installed from HA
+    assert "entity_picture" not in st.attributes
 
 
 async def test_installing(hass: HomeAssistant, aioclient_mock):
