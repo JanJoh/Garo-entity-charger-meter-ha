@@ -19,6 +19,7 @@ from __future__ import annotations
 import logging
 import re
 import zlib
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -46,6 +47,8 @@ _FACTOR_RE = re.compile(r"([A-Za-z0-9%]+)=(-?\d+|True|False)")
 _RELAY_RE = re.compile(r"(?:Activate relays, mode=|Trying to keep relay mode=)(mode_\w+)")
 _RELAY_OFF_RE = re.compile(r"deactivated relays")
 _STATUS_RE = re.compile(r"Status changed, connector id: (\d+), status=(\w+)")
+# The car drew >10 % more than offered for a few seconds; the charger pauses (OverloadProt).
+_OVERLOAD_RE = re.compile(r"Temporary derating - Temporary derating started")
 
 # Factors in the max_current line that are not upper limits.
 NON_LIMIT_FACTORS = {"OwnerMin", "10%OverloadProt"}
@@ -198,6 +201,7 @@ class ChargerLogState:
     connector_status: str | None = None
     status_logged_at: datetime | None = None
     firmware: FirmwareState = field(default_factory=FirmwareState)
+    overload_pauses: deque = field(default_factory=lambda: deque(maxlen=50))  # timestamps
 
     def missing(self) -> bool:
         return self.current_limit is None or self.relay_mode is None or self.connector_status is None
@@ -236,16 +240,21 @@ class ChargerLogState:
                 self.relay_mode, self.relay_logged_at = "off", ts
             elif (m := _STATUS_RE.search(line)) is not None:
                 self.connector_status, self.status_logged_at = m[2], ts
+            elif _OVERLOAD_RE.search(line) and ts is not None:
+                self.overload_pauses.append(ts)
 
     @property
     def limiting_factor(self) -> str | None:
         """Name of the factor that sets the current limit, e.g. 'DLM' or 'ConfMax'.
 
         When the limit is below OwnerMin the charger pauses; the factor that
-        dropped below the minimum is reported then.
+        dropped below the minimum is reported then, or "Overload protection"
+        when the pause is because the car drew more than it was offered.
         """
         if self.current_limit is None or not self.limit_factors:
             return None
+        if self.limit_factors.get("10%OverloadProt") is True and self.below_minimum:
+            return "Overload protection"
         limits = {
             k: v for k, v in self.limit_factors.items()
             if k not in NON_LIMIT_FACTORS and isinstance(v, int) and not isinstance(v, bool) and v > 0

@@ -2,7 +2,8 @@ from __future__ import annotations
 import logging, asyncio, aiohttp
 from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.util import dt as dt_util
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
 from homeassistant.helpers import aiohttp_client, device_registry as dr, entity_registry as er
@@ -85,6 +86,7 @@ LOG_SENSOR_MAP = {
     "limiting_factor":  {"name": "Charger Limiting Factor",  "icon": "mdi:filter-variant"},
     "relay_mode":       {"name": "Charger Relay Mode",       "icon": "mdi:electric-switch"},
     "connector_status": {"name": "Charger Connector Status", "icon": "mdi:ev-plug-type2"},
+    "overload_pauses":  {"name": "Charger Overload Pauses",  "icon": "mdi:car-clock"},
 }
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback):
@@ -517,7 +519,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     entities = [GaroChargerMeterSensor(coordinator, entry, host, k) for k in wanted if k in SENSOR_MAP]
     if log_state is not None:
-        entities += [GaroChargerLogSensor(coordinator, entry, host, k, log_state) for k in LOG_SENSOR_MAP]
+        entities += [GaroChargerLogSensor(coordinator, entry, host, k, log_state)
+                     for k in LOG_SENSOR_MAP if k != "overload_pauses"]
+        entities.append(GaroChargerOverloadPauses(coordinator, entry, host, log_state))
     else:
         # Log sensors turned off in options: drop the entities instead of leaving them unavailable.
         registry = er.async_get(hass)
@@ -610,6 +614,60 @@ class GaroChargerLogSensor(CoordinatorEntity, RestoreSensor):
         if self._key == "connector_status" and log.status_logged_at:
             return {"logged_at": log.status_logged_at.isoformat()}
         return None
+
+    @property
+    def device_info(self):
+        return _device_info(self.coordinator, self._entry, self._host)
+
+
+class GaroChargerOverloadPauses(CoordinatorEntity, RestoreSensor):
+    """Pauses because the car drew more than it was offered (the charger's 10 % overload protection).
+
+    Counts up for as long as the entity exists; the count and the time of the last
+    pause are restored after a restart so pauses still in the log are not counted twice.
+    """
+
+    _attr_has_entity_name = True
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, coordinator, entry, host, log_state: ChargerLogState):
+        super().__init__(coordinator)
+        self._entry = entry
+        self._host = host
+        self._log = log_state
+        info = LOG_SENSOR_MAP["overload_pauses"]
+        self._attr_name = info["name"]
+        self._attr_icon = info["icon"]
+        self._attr_unique_id = f"{host}_overload_pauses"
+        self._count = 0
+        self._last = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_sensor_data()) is not None and last.native_value is not None:
+            self._count = int(last.native_value)
+        if (state := await self.async_get_last_state()) is not None:
+            self._last = dt_util.parse_datetime(state.attributes.get("last_pause") or "")
+        self._count_new()
+
+    def _count_new(self) -> None:
+        for ts in self._log.overload_pauses:
+            if self._last is None or ts > self._last:
+                self._count += 1
+                self._last = ts
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._count_new()
+        super()._handle_coordinator_update()
+
+    @property
+    def native_value(self):
+        return self._count
+
+    @property
+    def extra_state_attributes(self):
+        return {"last_pause": self._last.isoformat() if self._last else None}
 
     @property
     def device_info(self):

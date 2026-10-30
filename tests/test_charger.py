@@ -134,3 +134,50 @@ def test_backfill_never_overwrites_newer_values():
                  "2026-10-22T10:00:00+00:00 charging:1 INFO max_current=8, DLM=8, OwnerMin=6"])
     assert st.connector_status == "Charging"
     assert st.current_limit == 8
+
+
+OVERLOAD = [
+    "2026-10-29T17:00:29.7+00:00 charging:1531 WARNING Temporary derating - Starting timer!",
+    "2026-10-29T17:00:35.9+00:00 charging:1524 WARNING Temporary derating - Temporary derating started!",
+    "2026-10-29T17:00:39.8+00:00 charging:1514 INFO Temporary derating - Resetting timer",
+    "2026-10-29T17:01:25.3+00:00 charging:1170 INFO max_current=1, DLM=12, FixCab=20, PP=0, ConfMax=12, SC=16, Delayed=16, OwnerMin=6, Bracket=16, Derating=12, CPUOverTemp=16, 10%OverloadProt=True",
+]
+
+
+def test_overload_pause_parsing():
+    st = ChargerLogState()
+    st.feed(OVERLOAD[:1] + OVERLOAD[2:3])  # timer started and reset: no pause
+    assert not st.overload_pauses
+    st.feed(OVERLOAD)
+    assert len(st.overload_pauses) == 1
+    assert st.limiting_factor == "Overload protection" and st.below_minimum is True
+
+
+async def _setup_with_log(hass, aioclient_mock, lines):
+    log = ("cut line\n" + "".join(f"{line}\n" for line in lines)).encode()
+    aioclient_mock.get(f"{BASE}/log/garoevse.log", content=log, status=206,
+                       headers={"Content-Range": f"bytes 0-{len(log) - 1}/{len(log)}"})
+    await _setup(hass, aioclient_mock)
+
+
+async def test_overload_pauses_sensor(hass: HomeAssistant, aioclient_mock):
+    await _setup_with_log(hass, aioclient_mock, OVERLOAD)
+    st = _state(hass, "overload_pauses")
+    assert st.state == "1"
+    assert st.attributes["last_pause"].startswith("2026-10-29T17:00:35")
+    assert st.attributes["state_class"] == "total_increasing"
+    assert _state(hass, "limiting_factor").state == "Overload protection"
+
+
+async def test_overload_pauses_not_recounted_after_restart(hass: HomeAssistant, aioclient_mock):
+    from homeassistant.core import State
+    from pytest_homeassistant_custom_component.common import mock_restore_cache_with_extra_data
+    mock_restore_cache_with_extra_data(hass, [(
+        State("sensor.charger_meter_charger_overload_pauses", "3",
+              {"last_pause": "2026-10-29T17:00:35.900000+00:00"}),
+        {"native_value": 3, "native_unit_of_measurement": None})])
+    later = "2026-10-29T19:19:13+00:00 charging:1524 WARNING Temporary derating - Temporary derating started!"
+    await _setup_with_log(hass, aioclient_mock, OVERLOAD + [later])
+    st = hass.states.get("sensor.charger_meter_charger_overload_pauses")
+    assert st.state == "4"  # the 17:00 pause was already counted, only 19:19 is new
+    assert st.attributes["last_pause"].startswith("2026-10-29T19:19:13")
