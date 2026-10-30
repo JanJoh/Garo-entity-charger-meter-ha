@@ -1,5 +1,5 @@
 DOMAIN = "garo_entity_charger_meter"
-PLATFORMS: list[str] = ["sensor"]
+PLATFORMS: list[str] = ["sensor", "update"]
 DEFAULT_SCAN_INTERVAL = 15  # seconds
 DEFAULT_SLOW_SCAN_INTERVAL = 300  # seconds
 

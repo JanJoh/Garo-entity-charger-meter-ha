@@ -95,6 +95,16 @@ Some facts exist only in the charger's own log (`/log/garoevse.log`), not in any
 
 The charger only logs the limit and the connector status when they change. On startup the integration therefore searches back once — through the current log and, if it was rotated recently, `garoevse.log.1.gz` — so these sensors have a value straight away. They also keep their last value across Home Assistant restarts.
 
+### Firmware update (from the device log)
+
+GARO pushes firmware to the charger itself (OCPP `SignedUpdateFirmware`); the charger downloads it, verifies the signature and installs it once the connector is free, i.e. after the car is unplugged. The **Firmware** update entity shows this under **Settings → Updates**:
+
+- **Installed version** from `/config/firmware-version`.
+- **Latest version** from the file name of the latest order in the log (e.g. `garo-entity-3.0.12-4.10.3-imx-r5bf98996f.upd` → `4.10.3`), while it is not yet installed.
+- **Release summary** and the `firmware_status` attribute follow the charger's reports: *Downloading*, *Downloaded*, *Downloaded and verified, waiting to install*, *Installing*, *Installed* or a failure. *In progress* is set while it installs.
+
+There is no install button: Home Assistant only reports, it never sends the charger an update command. The order is kept across restarts, since the log reaches back only a couple of days. Needs the log reading above to be on.
+
 ### Diagnostics & device info (slow poll, disabled by default)
 
 | Sensor | Notes |

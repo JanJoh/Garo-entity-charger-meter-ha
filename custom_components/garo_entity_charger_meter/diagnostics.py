@@ -21,5 +21,6 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: ConfigE
             "limit_factors": log_state.limit_factors,
             "relay_mode": log_state.relay_mode,
             "connector_status": log_state.connector_status,
+            "firmware": log_state.firmware.as_dict(),
         },
     }

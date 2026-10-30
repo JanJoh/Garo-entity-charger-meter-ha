@@ -56,7 +56,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "session": session,
     }
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # One at a time: the update entity uses the coordinator the sensor platform creates.
+    for platform in PLATFORMS:
+        await hass.config_entries.async_forward_entry_setups(entry, [platform])
 
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 

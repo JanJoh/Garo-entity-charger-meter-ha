@@ -24,6 +24,8 @@ from datetime import datetime
 
 import aiohttp
 
+from .firmware import FirmwareState
+
 _LOGGER = logging.getLogger(__name__)
 
 LOG_PATH = "/log/garoevse.log"
@@ -195,6 +197,7 @@ class ChargerLogState:
     relay_logged_at: datetime | None = None
     connector_status: str | None = None
     status_logged_at: datetime | None = None
+    firmware: FirmwareState = field(default_factory=FirmwareState)
 
     def missing(self) -> bool:
         return self.current_limit is None or self.relay_mode is None or self.connector_status is None
@@ -204,6 +207,7 @@ class ChargerLogState:
         for line in lines_newest_first:
             if not self.missing():
                 return
+            self.firmware.backfill_line(line, _timestamp(line))
             older = ChargerLogState()
             older.feed([line])
             if self.current_limit is None and older.current_limit is not None:
@@ -217,6 +221,8 @@ class ChargerLogState:
     def feed(self, lines: list[str]) -> None:
         for line in lines:
             ts = _timestamp(line)
+            if self.firmware.feed_line(line, ts):
+                continue
             if (m := _LIMIT_RE.search(line)) is not None:
                 factors: dict[str, int | bool] = {}
                 for key, raw in _FACTOR_RE.findall(m[2]):

@@ -84,6 +84,7 @@ async def test_log_sensors_removed_when_disabled(hass: HomeAssistant, aioclient_
     result = await hass.config_entries.options.async_configure(result["flow_id"], {"enable_log_sensors": False})
     await hass.async_block_till_done()
     assert not [s for s in hass.states.async_all("sensor") if s.entity_id.endswith("connector_status")]
+    assert not hass.states.async_all("update")
     assert "password" not in entry.options
 
 
