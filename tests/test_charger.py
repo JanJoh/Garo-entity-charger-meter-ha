@@ -281,3 +281,41 @@ async def test_username_not_logged(hass: HomeAssistant, aioclient_mock, caplog):
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
     assert "sticker-user" not in caplog.text
+
+
+async def test_poll_decodes_in_executor_and_keeps_relevant_lines(hass: HomeAssistant, aioclient_mock):
+    """A regular poll decodes and scans the new bytes off the event loop."""
+    import threading
+    import aiohttp
+    from custom_components.garo_entity_charger_meter import logtail
+
+    url = f"{BASE}/log/garoevse.log"
+    noise = "".join(f"2026-10-22T10:20:{i % 60:02d}+00:00 http:1 INFO GET /status/energy-meter 200\n" for i in range(200))
+    log = ("cut line\n" + noise).encode() + LOG + (
+        '2026-10-22T10:21:00+00:00 ocpp:76 INFO GaroCS-1: > [2,"b","SignedFirmwareStatusNotification",'
+        '{"status":"Downloading","requestId":9}]\n'
+        "2026-10-22T10:21:05+00:00 core:1 INFO Temporary derating - Temporary derating started\n").encode()
+    aioclient_mock.get(url, content=log, status=206, headers={"Content-Range": f"bytes 0-{len(log) - 1}/{len(log)}"})
+
+    threads = []
+    real = logtail._relevant_lines
+
+    def spy(data):
+        threads.append(threading.current_thread())
+        return real(data)
+
+    logtail._relevant_lines = spy
+    session = aioclient_mock.create_session(hass.loop)
+    try:
+        follower = logtail.LogFollower(url, aiohttp.BasicAuth("u", "p"))
+        lines = await follower.poll(session, hass.async_add_executor_job)
+    finally:
+        logtail._relevant_lines = real
+        await session.close()
+    assert threads and threading.main_thread() not in threads
+    assert len(lines) == 6 and not any("http:1" in line for line in lines)
+
+    state = ChargerLogState()
+    state.feed(lines)
+    assert (state.current_limit, state.relay_mode, state.connector_status) == (1, "mode_1ph_l1_n", "SuspendedEVSE")
+    assert state.firmware.status == "Downloading" and len(state.overload_pauses) == 1

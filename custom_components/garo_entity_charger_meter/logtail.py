@@ -14,9 +14,11 @@ the log is rotated the server answers 416 (offset past the new, smaller file)
 and the follower starts over from the tail. ChargerLogState folds the lines
 into the latest known values.
 
-The one-off backfill at startup can decode and parse several MB, so that work
-runs in an executor job (`run_job`, Home Assistant's async_add_executor_job)
-on a copy of the state, which is then merged back on the event loop.
+Decoding and scanning log text runs in executor jobs (`run_job`, Home
+Assistant's async_add_executor_job), never on the event loop: a regular poll
+decodes the new bytes and keeps only the few lines ChargerLogState acts on;
+the one-off backfill at startup, which can read several MB, parses into a
+copy of the state that is then merged back on the event loop.
 """
 from __future__ import annotations
 
@@ -55,6 +57,9 @@ _RELAY_OFF_RE = re.compile(r"deactivated relays")
 _STATUS_RE = re.compile(r"Status changed, connector id: (\d+), status=(\w+)")
 # The car drew >10 % more than offered for a few seconds; the charger pauses (OverloadProt).
 _OVERLOAD_RE = re.compile(r"Temporary derating - Temporary derating started")
+# Any line ChargerLogState.feed acts on (firmware lines all contain "Firmware").
+_RELEVANT_RE = re.compile("|".join(
+    p.pattern for p in (_LIMIT_RE, _RELAY_RE, _RELAY_OFF_RE, _STATUS_RE, _OVERLOAD_RE)) + "|Firmware")
 
 # Factors in the max_current line that are not upper limits.
 NON_LIMIT_FACTORS = {"OwnerMin", "10%OverloadProt"}
@@ -93,8 +98,12 @@ class LogFollower:
     _partial: bytes = field(default=b"", repr=False)  # incomplete last line
     _head_fragment: bytes = field(default=b"", repr=False)  # end of the line cut by the tail start
 
-    async def poll(self, session: aiohttp.ClientSession) -> list[str]:
-        """Return complete lines appended since the previous poll."""
+    async def poll(self, session: aiohttp.ClientSession, run_job: RunJob | None = None) -> list[str]:
+        """Return complete lines appended since the previous poll.
+
+        With `run_job`, decoding happens in that executor job and only the
+        lines ChargerLogState.feed acts on are returned.
+        """
         range_header = (
             f"bytes=-{INITIAL_TAIL_BYTES}" if self.offset is None else f"bytes={self.offset}-"
         )
@@ -140,7 +149,9 @@ class LogFollower:
             self._partial = data
             return []
         self._partial = data[last_nl + 1:]
-        return data[: last_nl + 1].decode("utf-8", errors="replace").splitlines()
+        if run_job is None:
+            return data[: last_nl + 1].decode("utf-8", errors="replace").splitlines()
+        return await run_job(_relevant_lines, data[: last_nl + 1])
 
     async def read_backwards(
         self, session: aiohttp.ClientSession, state: "ChargerLogState", run_job: RunJob,
@@ -295,7 +306,12 @@ class ChargerLogState:
         return self.current_limit < owner_min
 
 
-RunJob = Callable[..., Awaitable["ChargerLogState"]]
+RunJob = Callable[..., Awaitable]
+
+
+def _relevant_lines(data: bytes) -> list[str]:
+    """Executor job: decode complete log lines and keep those ChargerLogState.feed acts on."""
+    return [line for line in data.decode("utf-8", errors="replace").splitlines() if _RELEVANT_RE.search(line)]
 
 
 def _parse_older(state: ChargerLogState, data: bytes, gzipped: bool) -> ChargerLogState:

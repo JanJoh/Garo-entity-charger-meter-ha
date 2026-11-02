@@ -476,7 +476,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         if log_follower is not None:
             try:
                 async with asyncio.timeout(15):
-                    log_state.feed(await log_follower.poll(session))
+                    log_state.feed(await log_follower.poll(session, hass.async_add_executor_job))
             except Exception as e:
                 _LOGGER.debug("Log poll failed: %s", e)
             # Once, after the first tail read: look further back for values the tail lacked
