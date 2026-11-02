@@ -19,6 +19,14 @@
           "scan_interval": "How often to fetch live data: power, current, voltage, charging state, CP/PP levels.",
           "slow_scan_interval": "How often to fetch data that rarely changes: temperatures, firmware version, device ID, network info, SIM and PLC status."
         }
+      },
+      "reauth_confirm": {
+        "title": "GARO EV Charger — Sign in again",
+        "description": "The charger at {host} rejected the stored credentials. Enter them again; they are printed on a sticker on the device.",
+        "data": {
+          "username": "Username",
+          "password": "Password"
+        }
       }
     },
     "error": {
@@ -26,6 +34,10 @@
       "invalid_auth": "Invalid credentials. Check username and password (password is case-sensitive, use lowercase).",
       "slow_must_be_gte_fast": "Slow poll interval must be greater than or equal to the fast poll interval.",
       "unknown": "Unexpected error. Check the Home Assistant logs."
+    },
+    "abort": {
+      "already_configured": "This device is already configured.",
+      "reauth_successful": "Credentials updated."
     }
   },
   "options": {

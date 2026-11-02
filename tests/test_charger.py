@@ -119,7 +119,7 @@ async def test_backfill_from_rotated_log(hass: HomeAssistant, aioclient_mock):
         follower, state = LogFollower(url, aiohttp.BasicAuth("u", "p")), ChargerLogState()
         state.feed(await follower.poll(session))
         assert state.relay_mode == "mode_1ph_l1_n" and state.missing()
-        await follower.read_backwards(session, state)
+        await follower.read_backwards(session, state, hass.async_add_executor_job)
         assert state.current_limit == 12          # newest, not the older 11
         assert state.connector_status == "SuspendedEV"
         assert not state.missing()
@@ -181,3 +181,103 @@ async def test_overload_pauses_not_recounted_after_restart(hass: HomeAssistant, 
     st = hass.states.get("sensor.charger_meter_charger_overload_pauses")
     assert st.state == "4"  # the 17:00 pause was already counted, only 19:19 is new
     assert st.attributes["last_pause"].startswith("2026-10-29T19:19:13")
+
+
+def _reauth_flows(hass):
+    from homeassistant.config_entries import SOURCE_REAUTH
+    return [f for f in hass.config_entries.flow.async_progress() if f["context"]["source"] == SOURCE_REAUTH]
+
+
+async def test_backfill_parses_in_executor(hass: HomeAssistant, aioclient_mock):
+    """Decoding and parsing older log data never runs on the event loop."""
+    import gzip, threading
+    import aiohttp
+    from custom_components.garo_entity_charger_meter import logtail
+
+    url = f"{BASE}/log/garoevse.log"
+    current = b"x" * 50 + b"\n" + b"2026-10-22T13:00:00+00:00 charging:2124 INFO Activate relays, mode=mode_3ph\n"
+    aioclient_mock.get(url, content=current, status=206,
+                       headers={"Content-Range": f"bytes 0-{len(current) - 1}/{len(current)}"})
+    aioclient_mock.get(f"{url}.1.gz", content=gzip.compress(
+        b"2026-10-22T12:00:00+00:00 charging:1170 INFO max_current=11, DLM=11, ConfMax=12, OwnerMin=6\n"
+        b"2026-10-22T12:30:00+00:00 status_handler:9 INFO Status changed, connector id: 1, status=Charging\n"))
+
+    threads = []
+    real_parse = logtail._parse_older
+
+    def spy(*args):
+        threads.append(threading.current_thread())
+        return real_parse(*args)
+
+    logtail._parse_older = spy
+    session = aioclient_mock.create_session(hass.loop)
+    try:
+        follower, state = logtail.LogFollower(url, aiohttp.BasicAuth("u", "p")), ChargerLogState()
+        state.feed(await follower.poll(session))
+        await follower.read_backwards(session, state, hass.async_add_executor_job)
+    finally:
+        logtail._parse_older = real_parse
+        await session.close()
+    assert threads and threading.main_thread() not in threads
+    assert (state.current_limit, state.connector_status, state.relay_mode) == (11, "Charging", "mode_3ph")
+
+
+async def test_rejected_password_at_setup_starts_reauth(hass: HomeAssistant, aioclient_mock):
+    from homeassistant.config_entries import ConfigEntryState
+    aioclient_mock.get(f"{BASE}/status/energy-meter", status=401)
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=HOST,
+                            data={"host": HOST, "username": "u", "password": "wrong", "ignore_tls_errors": True})
+    entry.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_ERROR
+    assert len(_reauth_flows(hass)) == 1
+
+
+async def test_rejected_password_while_running_starts_reauth(hass: HomeAssistant, aioclient_mock):
+    from datetime import timedelta
+    from homeassistant.util import dt as dt_util
+    from pytest_homeassistant_custom_component.common import async_fire_time_changed
+    await _setup(hass, aioclient_mock)
+    assert not _reauth_flows(hass)
+
+    aioclient_mock.clear_requests()
+    aioclient_mock.get(f"{BASE}/status/energy-meter", status=401)
+    for p in ("/status/temperatures", "/config/firmware-version", "/config/device-id", "/config/unit-id",
+              "/hal/cp-level-max", "/hal/cp-level-min", "/status/charging-state", "/hal/pp-level",
+              "/netconf/network-interface", "/netconf/connection-status", "/status/sim-info", "/plc/device-status",
+              "/status/metervalue-sample", "/log/garoevse.log"):
+        aioclient_mock.get(f"{BASE}{p}", status=401)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=20))
+    await hass.async_block_till_done()
+    assert len(_reauth_flows(hass)) == 1
+
+    calls = aioclient_mock.call_count
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=60))
+    await hass.async_block_till_done()
+    assert aioclient_mock.call_count == calls
+
+
+async def test_reauth_flow_stores_new_password(hass: HomeAssistant, aioclient_mock):
+    entry = await _setup(hass, aioclient_mock)
+    aioclient_mock.get(f"{BASE}/", text="ok")
+    result = await entry.start_reauth_flow(hass)
+    assert result["step_id"] == "reauth_confirm"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"username": "u", "password": "new"})
+    await hass.async_block_till_done()
+    assert result["type"] == "abort" and result["reason"] == "reauth_successful"
+    assert entry.data["password"] == "new" and entry.data["host"] == HOST
+    assert "password" not in entry.options
+
+
+async def test_username_not_logged(hass: HomeAssistant, aioclient_mock, caplog):
+    import logging
+    caplog.set_level(logging.DEBUG, logger="custom_components.garo_entity_charger_meter")
+    _mock_device(aioclient_mock)
+    entry = MockConfigEntry(domain=DOMAIN, unique_id=HOST,
+                            data={"host": HOST, "username": "sticker-user", "password": "p", "ignore_tls_errors": True})
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert "sticker-user" not in caplog.text

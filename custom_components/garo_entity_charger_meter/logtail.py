@@ -13,13 +13,19 @@ last INITIAL_TAIL_BYTES, later reads fetch only what was appended since. When
 the log is rotated the server answers 416 (offset past the new, smaller file)
 and the follower starts over from the tail. ChargerLogState folds the lines
 into the latest known values.
+
+The one-off backfill at startup can decode and parse several MB, so that work
+runs in an executor job (`run_job`, Home Assistant's async_add_executor_job)
+on a copy of the state, which is then merged back on the event loop.
 """
 from __future__ import annotations
 
+import copy
 import logging
 import re
 import zlib
 from collections import deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -136,7 +142,9 @@ class LogFollower:
         self._partial = data[last_nl + 1:]
         return data[: last_nl + 1].decode("utf-8", errors="replace").splitlines()
 
-    async def read_backwards(self, session: aiohttp.ClientSession, state: "ChargerLogState") -> int:
+    async def read_backwards(
+        self, session: aiohttp.ClientSession, state: "ChargerLogState", run_job: RunJob,
+    ) -> int:
         """Search the log before tail_start for values `state` is still missing.
 
         Reads BACKFILL_CHUNK_BYTES at a time towards the start of the file, newest
@@ -162,16 +170,15 @@ class LogFollower:
                 carry, data = (data, b"") if nl < 0 else (data[: nl + 1], data[nl + 1:])
             else:
                 carry = b""
-            lines = data.decode("utf-8", errors="replace").splitlines()
-            state.backfill(reversed(lines))
+            state.merge_backfill(await run_job(_parse_older, state, data, False))
             end = start
 
         if end == 0 and state.missing() and read < BACKFILL_MAX_BYTES:
             # Current file exhausted (it was rotated recently): try the previous one.
-            read += await self._read_rotated(session, state)
+            read += await self._read_rotated(session, state, run_job)
         return read
 
-    async def _read_rotated(self, session: aiohttp.ClientSession, state: "ChargerLogState") -> int:
+    async def _read_rotated(self, session: aiohttp.ClientSession, state: "ChargerLogState", run_job: RunJob) -> int:
         async with session.get(f"{self.url}.1.gz", auth=self.auth) as resp:
             if resp.status != 200:
                 _LOGGER.debug("Rotated log HTTP %s", resp.status)
@@ -181,11 +188,11 @@ class LogFollower:
             _LOGGER.debug("Rotated log larger than %d bytes, skipped", ROTATED_MAX_BYTES)
             return len(body)
         try:
-            text = zlib.decompress(body, wbits=zlib.MAX_WBITS | 16).decode("utf-8", errors="replace")
+            older = await run_job(_parse_older, state, body, True)
         except zlib.error as err:
             _LOGGER.debug("Rotated log not gzip: %s", err)
             return len(body)
-        state.backfill(reversed(text.splitlines()))
+        state.merge_backfill(older)
         return len(body)
 
 
@@ -221,6 +228,21 @@ class ChargerLogState:
                 self.relay_mode, self.relay_logged_at = older.relay_mode, older.relay_logged_at
             if self.connector_status is None and older.connector_status is not None:
                 self.connector_status, self.status_logged_at = older.connector_status, older.status_logged_at
+
+    def merge_backfill(self, older: "ChargerLogState") -> None:
+        """Take the values `older` found that are still unset here (see _parse_older)."""
+        if self.current_limit is None and older.current_limit is not None:
+            self.current_limit, self.limit_factors, self.limit_logged_at = (
+                older.current_limit, older.limit_factors, older.limit_logged_at)
+        if self.relay_mode is None and older.relay_mode is not None:
+            self.relay_mode, self.relay_logged_at = older.relay_mode, older.relay_logged_at
+        if self.connector_status is None and older.connector_status is not None:
+            self.connector_status, self.status_logged_at = older.connector_status, older.status_logged_at
+        fw, ofw = self.firmware, older.firmware
+        if fw.file is None and fw.ordered_at is None and ofw.file is not None:
+            fw.version, fw.revision, fw.file, fw.ordered_at = ofw.version, ofw.revision, ofw.file, ofw.ordered_at
+        if fw.status is None and ofw.status is not None:
+            fw.status, fw.status_at = ofw.status, ofw.status_at
 
     def feed(self, lines: list[str]) -> None:
         for line in lines:
@@ -271,6 +293,22 @@ class ChargerLogState:
         if self.current_limit is None or not isinstance(owner_min, int):
             return None
         return self.current_limit < owner_min
+
+
+RunJob = Callable[..., Awaitable["ChargerLogState"]]
+
+
+def _parse_older(state: ChargerLogState, data: bytes, gzipped: bool) -> ChargerLogState:
+    """Executor job: backfill older log bytes into a copy of `state`.
+
+    Decompressing and parsing a few MB takes seconds on small hardware, so it
+    must not run on the event loop; the caller merges the result back.
+    """
+    if gzipped:
+        data = zlib.decompress(data, wbits=zlib.MAX_WBITS | 16)
+    work = copy.deepcopy(state)
+    work.backfill(reversed(data.decode("utf-8", errors="replace").splitlines()))
+    return work
 
 
 def _timestamp(line: str) -> datetime | None:

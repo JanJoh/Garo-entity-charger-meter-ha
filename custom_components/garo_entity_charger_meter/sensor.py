@@ -3,6 +3,7 @@ import logging, asyncio, aiohttp
 from datetime import timedelta
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.util import dt as dt_util
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, CoordinatorEntity
 from homeassistant.helpers.entity import DeviceInfo, EntityCategory
@@ -106,9 +107,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     auth_scheme = opt(CONF_AUTH_SCHEME)
 
     _LOGGER.debug(
-        "Setup entry with host=%s user=%s password_set=%s auth_scheme=%s",
+        "Setup entry with host=%s password_set=%s auth_scheme=%s",
         host,
-        username,
         bool(password),
         auth_scheme,
     )
@@ -317,6 +317,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             async with asyncio.timeout(15):
                 async with session.get(base_url, auth=aiohttp.BasicAuth(username, password)) as resp:
                     text = await resp.text()
+                    if resp.status in (401, 403):
+                        # Stops polling and asks the user for new credentials (reauth flow).
+                        raise ConfigEntryAuthFailed(f"Authentication failed (status {resp.status})")
                     if resp.status != 200:
                         _LOGGER.warning("Status %s energy URL=%s body=%s", resp.status, base_url, text[:160])
                     else:
@@ -356,6 +359,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                                         result["energy"] = kwh
                                     elif meas == "Power.Active.Import":
                                         result["power"] = val
+        except ConfigEntryAuthFailed:
+            raise
         except Exception as e:
             _LOGGER.warning("Energy update failed: %s", e)
 
@@ -481,7 +486,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 if log_state.missing():
                     try:
                         async with asyncio.timeout(60):
-                            n = await log_follower.read_backwards(session, log_state)
+                            n = await log_follower.read_backwards(session, log_state, hass.async_add_executor_job)
                         _LOGGER.debug("Log backfill read %d bytes, still missing=%s", n, log_state.missing())
                     except Exception as e:
                         _LOGGER.debug("Log backfill failed: %s", e)
@@ -491,6 +496,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     coordinator = DataUpdateCoordinator(
         hass,
         _LOGGER,
+        config_entry=entry,
         name="garo_entity_charger_meter",
         update_method=_async_update_data,
         update_interval=timedelta(seconds=scan_interval),

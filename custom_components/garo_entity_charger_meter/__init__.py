@@ -4,7 +4,7 @@ from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.helpers import aiohttp_client
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 
 from .const import (
     DOMAIN, PLATFORMS, SERVICE_REFRESH,
@@ -38,7 +38,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             async with session.get(url, auth=aiohttp.BasicAuth(username, password)) as resp:
                 txt = await resp.text()
                 if resp.status in (401,403):
-                    raise ConfigEntryNotReady(f"Authentication failed (status {resp.status})")
+                    raise ConfigEntryAuthFailed(f"Authentication failed (status {resp.status})")
                 if resp.status == 404:
                     raise ConfigEntryNotReady("Endpoint not found (404) - adjust API_PATH")
                 if resp.status >= 400:

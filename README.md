@@ -30,10 +30,11 @@ Also surfaces EV charging state, CP/PP signal levels, temperatures, and device d
 
 ### HACS (recommended)
 
-1. HACS → **Custom repositories** → add `https://github.com/JanJoh/Garo-entity-charger-meter-ha` as type **Integration**
-2. Install **GARO Entity Charger Meter**
-3. Restart Home Assistant
-4. Settings → Devices & Services → **Add integration** → search for *GARO*
+1. In HACS, search for **GARO Entity Charger Meter** and download it
+2. Restart Home Assistant
+3. Settings → Devices & Services → **Add integration** → search for *GARO*
+
+Not listed in HACS yet? Add `https://github.com/JanJoh/Garo-entity-charger-meter-ha` under HACS → **Custom repositories** as type **Integration** first.
 
 ### Manual
 
